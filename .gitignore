@@ -1,8 +1,20 @@
 .env
-data/
+
+# Vault state. ./data/content is the source of truth -- back the directory up, do
+# not commit artifacts. The directories themselves ARE tracked (via .gitkeep) so a
+# fresh clone has them before `docker compose up` runs: Docker creates a missing
+# bind-mount source as root, which would leave you needing sudo to drop a file in
+# your own inbox.
+data/*
+!data/.gitkeep
 dev/
-inbox/*.htm*
+
+# Case-insensitive: ingest matches .html/.htm in any case, so IDEA.HTML is an
+# artifact too and must not be committable.
+inbox/*.[hH][tT][mM]*
 inbox/_ingested/
+!inbox/.gitkeep
+
 __pycache__/
 *.pyc
 .pytest_cache/

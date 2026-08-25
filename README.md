@@ -4,20 +4,81 @@ A self-hosted repository for self-contained HTML artifacts. Drop a file in a fol
 it appears on the index as a card with a title, tags, description and date. Click the
 card, read the artifact. No URLs to manage, no rebuild step, no CMS.
 
-## Setup (about 10 minutes)
+## Deploy
+
+Three stages. Each one ends in a check you can actually run, so a failure is
+localised rather than discovered three steps later.
+
+### 1. Local, no ingress (about 5 minutes)
 
 ```bash
-cp .env.example .env          # set VAULT_TOKEN to a long random string
-docker compose up -d --build  # vault on 127.0.0.1:8000
+cp .env.example .env
+python3 -c "import secrets; print(secrets.token_urlsafe(48))"   # paste into VAULT_TOKEN
+printf 'VAULT_UID=%s\nVAULT_GID=%s\n' "$(id -u)" "$(id -g)" >> .env
+docker compose up -d --build
+curl -s localhost:8000/healthz
 ```
 
-To put it on a real hostname with no open ports and no certificate management:
+Expect `{"ok":true,"count":0}`.
+
+`VAULT_TOKEN` ships **empty on purpose** and compose refuses to start until you set
+it — writes fail closed rather than defaulting open, so there is no "forgot to set
+it" state where the vault is publicly writable. If you skip the paste you get
+`required variable VAULT_TOKEN is missing a value`, which is the guard working.
+
+`VAULT_UID`/`VAULT_GID` make the container run as you. Without them everything the
+vault writes is owned by `root`, and you need `sudo` to drop a file in your own
+inbox, to point a sync folder at it, or to back `./data` up. They default to 1000,
+which is right on most single-user machines; the `id -u` line above is exact.
+
+Then confirm the pieces that matter:
+
+```bash
+docker compose ps                       # vault only, and healthy
+echo '<title>Hello</title><p>A first artifact, long enough for a description.</p>' > inbox/hello.html
+sleep 5 && curl -s localhost:8000/api/ideas   # the artifact appears
+ls -ld data inbox                       # owned by you, not root
+```
+
+Inbox pickup takes two polls (about 4s) — a file is held until its size and mtime
+stop changing, so a half-written sync download is never published as truth.
+
+### 2. Public hostname, still no open ports
 
 1. Cloudflare Zero Trust → Networks → Tunnels → create a tunnel, copy the token
    into `CF_TUNNEL_TOKEN` in `.env`.
 2. Add a public hostname: `ideas.yourdomain.com` → `http://vault:8000`.
-3. Zero Trust → Access → Applications → add `ideas.yourdomain.com`, policy
-   "emails ending in @yourcompany.com". Now only your team can read it.
+3. Start the edge. **The tunnel is behind a compose profile and will not start
+   without it** — that is deliberate, since it crash-loops when no tunnel exists
+   yet:
+
+```bash
+docker compose --profile edge up -d
+```
+
+Plain `docker compose up -d` from then on will *not* start the tunnel. The profile
+has to be named every time.
+
+Check from a device on another network: `https://ideas.yourdomain.com/healthz`
+responds, and `nmap` against the host shows no newly opened inbound port.
+
+### 3. Reader auth at the edge
+
+Zero Trust → Access → Applications → add `ideas.yourdomain.com`, policy "emails
+ending in @yourcompany.com". An incognito window should now be challenged, and your
+own email should get through.
+
+Then verify the write boundary separately, because Access protects *reads* and the
+bearer token protects *writes* — they are different mechanisms and only one of them
+lives in this codebase:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' -X POST https://ideas.yourdomain.com/api/publish -F file=@x.html
+```
+
+Expect `401`. Anything else — especially a 200, or an Access redirect that silently
+succeeds — means writes are not actually protected. Stop and fix that before
+publishing anything real.
 
 Publishing then works three ways:
 
@@ -49,7 +110,7 @@ Every field falls back, so a file with none of it still publishes:
 | Field | Fallback |
 |---|---|
 | title | `<title>`, then first `<h1>`, then the filename |
-| slug | slugified title; on a title collision with different content, a 6-char hash is appended |
+| slug | slugified title; on a collision with different content already on disk, a hash suffix is appended (6 chars, widening if that is taken too) |
 | description | `<meta name="description">`, then the first paragraph over 40 characters |
 | tags | `<meta name="keywords">`, else none |
 | date | today |
@@ -63,7 +124,7 @@ accumulating `-v2`, `-final`, `-final-2`.
 
 The detail page is thin chrome — back link, title, tags, date — over an iframe. The
 artifact is served from `/raw/<slug>` with `Content-Security-Policy: sandbox
-allow-scripts`, which gives it a unique origin. Its scripts run (so charts and
+allow-scripts allow-popups allow-forms`, which gives it a unique origin. Its scripts run (so charts and
 dashboards work) but cannot read the vault's cookies or storage. For strict
 isolation, set `VAULT_RAW_ORIGIN` to a second hostname pointed at the same
 container and serve raw content from there.
@@ -95,17 +156,3 @@ scripts/publish.sh
 ## Keyboard
 
 `/` focuses search, `Esc` clears it. Tag chips toggle.
-
-## Bringing up the Cloudflare tunnel
-
-The `tunnel` service sits behind a compose profile, so `docker compose up -d`
-starts the vault alone. That is deliberate: without the profile the service
-crash-loops until a tunnel exists. Once you have pasted `CF_TUNNEL_TOKEN` into
-`.env` (PLAN M3.1), start the edge with:
-
-```bash
-docker compose --profile edge up -d
-```
-
-Plain `docker compose up -d` from then on will NOT start the tunnel -- the
-profile has to be named every time.
