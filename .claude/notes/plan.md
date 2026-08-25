@@ -146,6 +146,42 @@ own verification command; refuted and unverified claims are recorded in
   covered by U5; `mcp` is PLAN M5.1 and out of scope by this plan's own
   boundaries.
 
+  **UPDATE — the sweep later completed (14/14 agents, 42 candidates).** Its
+  verify phase returned 7 verdicts: **6 refuted**, every one a stale re-report of
+  a defect I had already fixed (the verifiers name commits `dcf9d87` and
+  `2018493`), and **1 confirmed** — F19, below. The cap left **35 candidates
+  unverified**; I triaged all 35 by hand.
+
+  - **F19 (confirmed).** `api_publish` was `async def` but ran `ingest.publish`
+    inline, so BeautifulSoup cost landed on the event loop. A legal upload under
+    `VAULT_MAX_BYTES` was measured at **65s of CPU** (soup 41.9s + first_prose
+    8.3s, linear in size), freezing every route including `/healthz` — which the
+    M6.3 monitor would read as the vault being down. Now `asyncio.to_thread`,
+    the mechanism `watch_inbox` already used.
+  - **F20 — a regression from my own F8 fix.** `secrets.compare_digest` raises on
+    a non-ASCII `str`, so an unauthenticated caller could turn a 401 into a 500
+    with `Authorization: Bearer tökén`. httpx refuses to send such a header,
+    which is why the suite missed it; a raw socket does not. Verified against
+    uvicorn: **500 before, 401 after**. Now compared as bytes.
+  - **F21 — a regression from my own F7 fix.** `prune` deleted every row absent
+    from the directory snapshot, so an artifact published *during* a reindex lost
+    its row while its file stayed on disk. The inbox poller runs every 3s, so the
+    race is routine. Now a row is dropped only if its file is genuinely absent at
+    prune time.
+  - Also documented `docker compose --profile edge up -d` in the README — my own
+    profile change had made it the required M3 command and nothing said so.
+
+  Of the remaining 32 unverified candidates: most restate defects already fixed
+  (F6, F7, F9, F10, F12, F14, F15, F17, F18). Genuinely open and **not** actioned,
+  all in areas this plan excludes or already flagged: five `mcp/server.py`
+  findings (PLAN M5.1, out of scope — the meta-block injector duplicating a block
+  and its defaults overwriting an artifact's own visibility look real and serious,
+  and should be the first thing M5.1 checks), two `index.html` client-filter
+  issues (tags containing spaces break the chip filter; uncapped tag text is
+  rendered five times per card), `publish.sh` discarding the API's error body, no
+  `overflow-wrap` in the CSS, and the `.gitignore` `inbox/*.htm*` case-sensitivity
+  mismatch. None are correctness defects in the shipped write path.
+
 ## U7 — Green gate
 
 - [x] **Verify:** `pytest -q` exits 0 with zero failures; run twice, identical

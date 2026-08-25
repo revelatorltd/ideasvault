@@ -30,7 +30,14 @@ def require_token(authorization: str = Header(default="")) -> None:
     presented = authorization.removeprefix("Bearer ").strip()
     # SPEC 4: "constant comparison against VAULT_TOKEN". `!=` on str short-circuits
     # at the first differing byte and leaks the length of the shared prefix.
-    if not secrets.compare_digest(presented, PUBLISH_TOKEN):
+    #
+    # Compared as BYTES, not str: compare_digest raises TypeError on a str holding
+    # any non-ASCII character, so comparing directly let an unauthenticated caller
+    # turn a 401 into a 500 just by sending `Authorization: Bearer tökén` -- and it
+    # would have broken every write outright for a non-ASCII VAULT_TOKEN.
+    if not secrets.compare_digest(
+        presented.encode("utf-8"), PUBLISH_TOKEN.encode("utf-8")
+    ):
         raise HTTPException(401, "That token is not valid for publishing.")
 
 
@@ -117,7 +124,14 @@ def healthz():
 @app.post("/api/publish", dependencies=[Depends(require_token)])
 async def api_publish(file: UploadFile = File(...)):
     try:
-        result = ingest.publish(await file.read(), filename=file.filename or "")
+        # Off the event loop, the same way watch_inbox already dispatches this work.
+        # BeautifulSoup cost scales with document size and VAULT_MAX_BYTES allows
+        # 15 MB, so a legal upload of many small elements was measured at ~65s of
+        # pure CPU -- inline, that froze every other route, /healthz included, which
+        # would have read as the vault being down.
+        result = await asyncio.to_thread(
+            ingest.publish, await file.read(), file.filename or ""
+        )
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     return JSONResponse(result, status_code=201 if result["action"] == "created" else 200)

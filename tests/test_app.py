@@ -611,3 +611,100 @@ def test_F18_an_oversized_inbox_file_is_rejected_from_stat_not_after_reading(vau
     assert "256" in results[0]["error"]
     assert "huge.html" not in reads, "the file must not be read into memory at all"
     assert (vault.inbox / "huge.html").exists(), "and it stays for inspection"
+
+
+def test_F20_a_non_ascii_token_is_401_not_500(vault):
+    """REGRESSION GUARD F20 -- a regression introduced by the F8 fix.
+
+    secrets.compare_digest raises TypeError on a str holding any non-ASCII
+    character, so comparing the header value directly let an unauthenticated
+    caller turn a 401 into a 500.
+
+    This calls require_token directly rather than going through the test client,
+    because httpx refuses to send a non-ASCII header. A raw client is under no
+    such obligation: Starlette decodes header bytes as latin-1, so the bytes
+    "Bearer t\xf6k\xe9n" on the wire arrive here as a non-ASCII str. Verified
+    over a real socket against uvicorn: 500 before this fix, 401 after.
+    """
+    import pytest as _pytest
+    from fastapi import HTTPException
+
+    for bad in ["Bearer t\xf6k\xe9n", "Bearer \u043f\u0430\u0440\u043e\u043b\u044c", "Bearer \xff"]:
+        with _pytest.raises(HTTPException) as exc:
+            main.require_token(authorization=bad)
+        assert exc.value.status_code == 401, f"{bad!r} must be 401, not a crash"
+
+    main.require_token(authorization=f"Bearer {vault.token}")  # real one still passes
+
+
+def test_F20_a_non_ascii_vault_token_still_authenticates(monkeypatch):
+    """The same crash would have broken every write for a non-ASCII VAULT_TOKEN."""
+    import pytest as _pytest
+    from fastapi import HTTPException
+
+    monkeypatch.setattr(main, "PUBLISH_TOKEN", "p\xe4ssw\xf6rd-\xfcnicode")
+
+    with _pytest.raises(HTTPException) as exc:
+        main.require_token(authorization="Bearer wrong")
+    assert exc.value.status_code == 401
+
+    main.require_token(authorization="Bearer p\xe4ssw\xf6rd-\xfcnicode")  # must not raise
+
+
+def test_F20_comparison_is_still_constant_time_over_bytes():
+    import inspect
+    src = inspect.getsource(main.require_token)
+    assert "compare_digest" in src, "SPEC 4 requires a constant-time comparison"
+    assert 'encode("utf-8")' in src, "and it must compare bytes, not str"
+
+
+def test_F21_reindex_does_not_orphan_an_artifact_published_while_it_runs(vault):
+    """REGRESSION GUARD F21 -- a regression introduced by the F7 prune fix.
+
+    reindex scanned the directory, then pruned every row not in that snapshot. The
+    inbox poller runs every VAULT_POLL_SECONDS, so a publish landing mid-scan was
+    routine -- and its row was deleted while its file stayed on disk, leaving the
+    artifact invisible until some later reindex happened to catch it.
+    """
+    vault.publish(_artifact("Existing", "body", slug="existing"))
+
+    real_scan = ingest._artifact_files
+    def scan_then_publish(directory):
+        found = real_scan(directory)
+        if directory == ingest.CONTENT_DIR and not getattr(scan_then_publish, "done", False):
+            scan_then_publish.done = True
+            # A concurrent publish lands after the scan, before the prune.
+            ingest.publish(_artifact("Racer", "body", slug="racer").encode())
+        return found
+
+    ingest._artifact_files = scan_then_publish
+    try:
+        vault.client.post("/api/reindex", headers=vault.auth)
+    finally:
+        ingest._artifact_files = real_scan
+
+    slugs = sorted(row["slug"] for row in vault.rows())
+    assert "racer" in slugs, "the concurrently-published artifact was orphaned"
+    assert (vault.content / "racer.html").exists()
+    assert vault.client.get("/raw/racer").status_code == 200
+    assert sorted(slugs) == ["existing", "racer"]
+
+
+def test_F19_publish_does_not_block_the_event_loop(vault):
+    """REGRESSION GUARD F19 -- confirmed by the sweep with a 65s measurement.
+
+    BeautifulSoup cost scales with document size and VAULT_MAX_BYTES allows 15 MB,
+    so a legal upload froze every other route, /healthz included. Asserting on
+    wall-clock would be flaky, so this asserts the mechanism: the CPU work must be
+    dispatched off the loop, the way watch_inbox already does it.
+    """
+    import inspect
+    src = inspect.getsource(main.api_publish)
+    assert "to_thread" in src, "publish must not run inline on the event loop"
+    assert "ingest.publish" in src
+
+    # And it still behaves.
+    r = vault.publish(_artifact("Threaded", "body", slug="threaded"))
+    assert r.status_code == 201
+    assert r.json()["slug"] == "threaded"
+    assert vault.client.get("/raw/threaded").status_code == 200

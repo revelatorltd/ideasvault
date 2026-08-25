@@ -95,3 +95,17 @@ scripts/publish.sh
 ## Keyboard
 
 `/` focuses search, `Esc` clears it. Tag chips toggle.
+
+## Bringing up the Cloudflare tunnel
+
+The `tunnel` service sits behind a compose profile, so `docker compose up -d`
+starts the vault alone. That is deliberate: without the profile the service
+crash-loops until a tunnel exists. Once you have pasted `CF_TUNNEL_TOKEN` into
+`.env` (PLAN M3.1), start the edge with:
+
+```bash
+docker compose --profile edge up -d
+```
+
+Plain `docker compose up -d` from then on will NOT start the tunnel -- the
+profile has to be named every time.

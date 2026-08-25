@@ -167,5 +167,13 @@ def reindex() -> int:
         db.upsert(meta, filename=path.name, size=len(raw),
                   sha=hashlib.sha256(raw).hexdigest())
         seen.add(meta.slug)
-    db.prune(seen)
+
+    # Drop only rows whose artifact is genuinely absent *now*. Pruning against
+    # `seen` alone deleted anything published after the scan began -- the inbox
+    # poller runs every VAULT_POLL_SECONDS, so that race is routine, and it left a
+    # file on disk with no row: invisible until some later reindex happened to
+    # catch it. Re-checking existence can only ever spare a live artifact.
+    for row in db.list_ideas("private"):
+        if row["slug"] not in seen and not (CONTENT_DIR / row["filename"]).exists():
+            db.delete(row["slug"])
     return len(seen)
