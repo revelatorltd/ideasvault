@@ -30,6 +30,11 @@ class Vault:
     content: pathlib.Path
     inbox: pathlib.Path
     db_path: pathlib.Path
+    token: str = TOKEN
+
+    @property
+    def auth(self) -> dict[str, str]:
+        return {"Authorization": f"Bearer {self.token}"}
 
     def publish(
         self,
@@ -69,3 +74,30 @@ def vault(tmp_path, monkeypatch) -> Vault:
     inbox.mkdir(parents=True)
     db.init()
     return Vault(TestClient(main.app), content, inbox, tmp_path / "vault.db")
+
+
+@pytest.fixture
+def vault_html():
+    """Build an artifact. Every part is optional so fallback chains can be probed."""
+
+    def build(
+        title: str | None = "Test Idea",
+        h1: str | None = None,
+        meta: dict[str, str] | None = None,
+        body: str = "Some body text.",
+        head: bool = True,
+    ) -> str:
+        tags = "".join(
+            f'<meta name="{k}" content="{v}">' for k, v in (meta or {}).items()
+        )
+        title_tag = f"<title>{title}</title>" if title else ""
+        h1_tag = f"<h1>{h1}</h1>" if h1 else ""
+        inner = f"{h1_tag}<p>{body}</p>"
+        if not head:
+            return f"<html><body>{inner}</body></html>"
+        return (
+            f"<!DOCTYPE html><html><head><meta charset='utf-8'>{title_tag}{tags}"
+            f"</head><body>{inner}</body></html>"
+        )
+
+    return build
