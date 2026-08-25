@@ -172,3 +172,80 @@ def test_slug_is_capped_and_charset_constrained(vault_html):
     m = metadata.parse(vault_html(meta={"idea:slug": "Has Spaces & Symbols!"}))
     assert all(c.isalnum() or c == "-" for c in m.slug), m.slug
     assert m.slug == m.slug.lower()
+
+
+# ---------------------------------------------------------------- F22 quoted markup
+
+def test_F22_metadata_inside_quoted_markup_is_ignored(vault_html):
+    """REGRESSION GUARD F22 / invariant 1.
+
+    html.parser does not treat <pre> as raw text, so an unescaped <meta> inside one
+    parses as a live tag. An artifact documenting the metadata contract therefore
+    claimed the slug from its own example -- and an explicit slug bypasses the
+    collision guard by design (SPEC 2.4), so it overwrote the idea it named and
+    flipped its visibility. Measured before the fix: a how-to page destroyed a
+    private artifact called q3-board-deck.
+    """
+    doc = (
+        "<html><head><title>How To Use The Vault</title></head><body>"
+        "<h1>How to publish</h1><p>Add this block to your artifact, please:</p>"
+        "<pre>"
+        '<meta name="idea:slug" content="q3-board-deck">'
+        '<meta name="idea:visibility" content="public">'
+        '<meta name="idea:tags" content="stolen, tags">'
+        "</pre></body></html>"
+    )
+    m = metadata.parse(doc, filename="howto.html")
+
+    assert m.slug == "how-to-use-the-vault", f"slug came from the example: {m.slug!r}"
+    assert m.slug_was_explicit is False, "an example must not count as an explicit slug"
+    assert m.visibility == "private", "visibility must not be escalated by an example"
+    assert m.tags == [], f"tags came from the example: {m.tags!r}"
+
+
+def test_F22_every_quoted_element_is_covered(vault_html):
+    for element in sorted(metadata.QUOTED_MARKUP):
+        doc = (
+            f"<html><head><title>Doc</title></head><body><{element}>"
+            f'<meta name="idea:slug" content="hijacked">'
+            f'<meta name="idea:visibility" content="public">'
+            f"</{element}></body></html>"
+        )
+        m = metadata.parse(doc)
+        assert m.slug == "doc", f"<{element}> leaked a slug: {m.slug!r}"
+        assert m.visibility == "private", f"<{element}> escalated visibility"
+
+
+def test_F22_real_metadata_outside_quoted_markup_still_works(vault_html):
+    """The fix must not cost any legitimate placement."""
+    # In <head>, the documented form.
+    m = metadata.parse(vault_html(meta={"idea:slug": "in-head", "idea:visibility": "public"}))
+    assert m.slug == "in-head" and m.visibility == "public" and m.slug_was_explicit
+
+    # In <body>, which SPEC 2.3 does not forbid.
+    m = metadata.parse(
+        "<html><body><meta name='idea:slug' content='in-body'>"
+        "<h1>T</h1></body></html>"
+    )
+    assert m.slug == "in-body" and m.slug_was_explicit
+
+    # A bare meta block with no <head> at all -- html.parser synthesises none, which
+    # is exactly why the fix is not "only look inside <head>".
+    m = metadata.parse(
+        "<meta name='idea:slug' content='no-head-at-all'>"
+        "<meta name='idea:title' content='No Head'>"
+        "<p>body</p>"
+    )
+    assert m.slug == "no-head-at-all", "a headless artifact must keep its metadata"
+    assert m.title == "No Head"
+
+
+def test_F22_a_real_tag_wins_over_a_quoted_one_regardless_of_order(vault_html):
+    """A page that documents the contract AND uses it must get its own value."""
+    doc = (
+        "<html><head>"
+        '<pre><meta name="idea:slug" content="from-the-example"></pre>'
+        '<meta name="idea:slug" content="the-real-one">'
+        "<title>T</title></head><body><p>b</p></body></html>"
+    )
+    assert metadata.parse(doc).slug == "the-real-one"

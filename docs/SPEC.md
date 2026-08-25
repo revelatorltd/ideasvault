@@ -70,6 +70,14 @@ data is not a rebuild. The cost is bounded: on total volume loss `revision` rese
 <meta name="idea:visibility"  content="private">
 ```
 
+`idea:*` tags are honoured anywhere in the document, **except** inside `pre`, `code`,
+`textarea`, `template` or `xmp`. Those elements display markup rather than apply it,
+and `html.parser` still parses a tag inside them as live. Without the exclusion, an
+artifact documenting this very contract sets its own slug from its own example — and
+since an explicit slug bypasses the collision guard by design (§2.4), it overwrites
+the idea it named. The rule is not "metadata must be in `<head>`": no `<head>` is
+synthesised for a bare meta block, so that would silently drop legitimate metadata.
+
 Fallback chains — parsing must never raise:
 
 | Field | Chain | Constraints |
@@ -128,7 +136,7 @@ Errors return `{"detail": "..."}` written for a human: what happened, what to do
 | `VAULT_INBOX` | `/data/inbox` | Watched drop folder |
 | `VAULT_VIEWER_LEVEL` | `private` | Visibility ceiling for readers |
 | `VAULT_RAW_ORIGIN` | `""` | Separate hostname for raw artifacts |
-| `VAULT_POLL_SECONDS` | `3` | Inbox scan interval |
+| `VAULT_POLL_SECONDS` | `2` | Inbox scan interval; pickup takes two polls (see §5) |
 | `VAULT_MAX_BYTES` | `15728640` | Upload limit |
 
 ## 4. Security model
@@ -177,7 +185,7 @@ Targets at ~1,000 artifacts on modest hardware:
 | `GET /i/{slug}` | < 50 ms p95 |
 | `GET /raw/{slug}` | disk-bound |
 | `POST /api/publish` | < 500 ms p95 |
-| Inbox pickup | < 5 s from file appearing |
+| Inbox pickup | < 5 s from file appearing (two polls at the 2 s default = 4 s) |
 | Full reindex, 1,000 files | < 30 s |
 
 Search and tag filtering run client-side over rendered DOM. At 1,000 cards the index
@@ -189,6 +197,7 @@ server-side filtering and pagination; the schema already supports it.
 | Failure | Behaviour | Recovery |
 |---|---|---|
 | Malformed HTML | Publishes with fallback metadata | None needed |
+| Inbox file still being written | Held until its size and mtime stop changing | Automatic |
 | Row exists, file missing | `410` with an instruction | `POST /api/reindex` |
 | Index corrupt or deleted | Empty index at boot triggers auto-reindex | Automatic |
 | Inbox file empty or oversized | Stays in `inbox/`, logged as `failed` | Inspect and fix |
