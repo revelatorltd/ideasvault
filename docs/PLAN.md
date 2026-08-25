@@ -69,7 +69,7 @@ fail-closed 503 triggers instead; fix in 2.0.
 The skeleton was smoke-tested, not covered. Do this before anything else so every
 later change is verifiable.
 
-- [ ] **1.1** Write `tests/` against §7 of the spec
+- [x] **1.1** Write `tests/` against §7 of the spec
 
 > Write a pytest suite covering all 14 requirements in section 7 of docs/SPEC.md.
 > Use fastapi.testclient.TestClient and monkeypatch/tmp_path so tests never touch
@@ -80,18 +80,30 @@ later change is verifiable.
 **Accept:** `pytest -q` shows 14+ passing, 0 failing. `pytest -q` twice in a row gives
 identical results (no ordering dependence).
 
-- [ ] **1.2** Fix whatever 1.1 surfaced
+**Done:** 50 passed, 0 failed; identical across three consecutive runs. 21 unit tests
+over `metadata.parse()` plus 29 against the app via `fastapi.testclient`. pytest and
+httpx live in a separate `requirements-dev.txt`, so `requirements.txt` is still five
+packages and the image ships neither.
+
+- [x] **1.2** Fix whatever 1.1 surfaced
 
 > Here are the failures from 1.1. Fix the application code, not the tests. After each
 > fix, re-run pytest and show me the output.
 
 **Accept:** full suite green.
 
+**Done:** ten defects fixed — F1, F2, F4, F6 from 0.1, plus F7 (`reindex` was not
+total, so `/raw/`'s "Run POST /api/reindex" advice could never clear a stale row),
+F8 (token comparison not constant-time, SPEC §4), F9 (`reindex` produced slugs
+violating SPEC §2.3 for arbitrary filenames), F10 (case-sensitive glob made
+`RESTORED.HTML` invisible). F3 was withdrawn, not a defect. See
+`.claude/notes/orientation.md`.
+
 ---
 
 ## M2 — Run it locally and file real artifacts (30 min)
 
-- [ ] **2.0** Clear the blockers 0.1 found before booting compose
+- [x] **2.0** Clear the blockers 0.1 found before booting compose
 
 Three small fixes, all outside `app/`:
 - `docker-compose.yml`: add `profiles: ["edge"]` to the `tunnel` service and a
