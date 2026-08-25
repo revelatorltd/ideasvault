@@ -118,12 +118,20 @@ starts `vault` only. `grep Inter app/templates/detail.html` matches.
 - [ ] **2.1** Boot via compose
 
 ```bash
-cp .env.example .env      # set VAULT_TOKEN to a long random string
+cp .env.example .env
+python3 -c "import secrets; print(secrets.token_urlsafe(48))"   # paste into VAULT_TOKEN
+printf 'VAULT_UID=%s\nVAULT_GID=%s\n' "$(id -u)" "$(id -g)" >> .env
 docker compose up -d --build
 curl -s localhost:8000/healthz
 ```
 
 **Accept:** `{"ok":true,"count":0}`
+
+`VAULT_TOKEN` ships empty and compose refuses to start until it is set — that is the
+fail-closed guard, not a bug. `VAULT_UID`/`VAULT_GID` run the container as you;
+without them `./data` and `./inbox` end up root-owned and 4.1 and 6.1 both need sudo.
+Also check `docker compose ps` reports the vault **healthy** and `ls -ld data inbox`
+shows your own uid. Full walkthrough in the README's Deploy section.
 
 - [ ] **2.2** Publish three real artifacts you actually have — one with a full meta
       block, one with none, one that contains live JavaScript (a chart or dashboard).
@@ -144,7 +152,9 @@ re-diagnose before building further — the plan's assumptions are wrong.
 
 1. Zero Trust → Networks → Tunnels → create, copy token to `CF_TUNNEL_TOKEN` in `.env`
 2. Public hostname `ideas.<domain>` → `http://vault:8000`
-3. `docker compose up -d`
+3. `docker compose --profile edge up -d` — **the profile is required.** The tunnel
+   does not start without it, and plain `docker compose up -d` will not start it on
+   any later run either.
 
 **Accept:** `https://ideas.<domain>/healthz` responds from a device on another network.
 `nmap` on the host shows no newly opened inbound port.

@@ -268,7 +268,7 @@ def test_7_14_drain_inbox_publishes_and_archives_and_leaves_a_bad_file(vault):
     (vault.inbox / "junk.html").write_text("<<<>>> not really html &&& <div unclosed")
     (vault.inbox / "empty.html").write_text("")
 
-    results = ingest.drain_inbox()
+    results = vault.drain()
 
     actions = {r.get("file", r.get("slug")): r["action"] for r in results}
     assert actions.get("empty.html") == "failed"
@@ -440,7 +440,7 @@ def test_F11_a_permanently_bad_inbox_file_is_reported_once(vault):
     """
     (vault.inbox / "empty.html").write_text("")
 
-    first = ingest.drain_inbox()
+    first = vault.drain()
     assert [r["action"] for r in first] == ["failed"]
 
     for _ in range(5):
@@ -453,12 +453,13 @@ def test_F11_fixing_a_bad_inbox_file_in_place_is_picked_up(vault):
     """The quiet must not be permanent -- SPEC 6's recovery is "inspect and fix"."""
     bad = vault.inbox / "fixme.html"
     bad.write_text("")
-    assert [r["action"] for r in ingest.drain_inbox()] == ["failed"]
+    assert [r["action"] for r in vault.drain()] == ["failed"]
     assert ingest.drain_inbox() == []
 
     bad.write_text(_artifact("Fixed Now", "a real body this time"))
 
-    results = ingest.drain_inbox()
+    # The rewrite changes the fingerprint, so it settles again before publishing.
+    results = vault.drain()
     assert [r["action"] for r in results] == ["created"]
     assert not bad.exists(), "it published, so it moved to _ingested/"
     assert (vault.inbox / "_ingested" / "fixme.html").exists()
@@ -605,7 +606,7 @@ def test_F18_an_oversized_inbox_file_is_rejected_from_stat_not_after_reading(vau
         pathlib.Path, "read_bytes",
         lambda self: (reads.append(self.name), real_read(self))[1],
     )
-    results = ingest.drain_inbox()
+    results = vault.drain()
 
     assert [r["action"] for r in results] == ["failed"]
     assert "256" in results[0]["error"]
@@ -708,3 +709,41 @@ def test_F19_publish_does_not_block_the_event_loop(vault):
     assert r.status_code == 201
     assert r.json()["slug"] == "threaded"
     assert vault.client.get("/raw/threaded").status_code == 200
+
+
+def test_F23_a_file_still_being_written_is_not_published(vault):
+    """REGRESSION GUARD F23 / invariant 1.
+
+    A sync client that writes straight to notes.html rather than to a temp name can
+    be read halfway through. drain_inbox archives the original immediately after
+    publishing, so a truncated artifact would become the permanent copy with nothing
+    left to restore it from. A file is therefore held until its size and mtime are
+    stable across two consecutive polls.
+    """
+    target = vault.inbox / "growing.html"
+    target.write_text("<html><head><title>Half</title></head><body><p>partial")
+
+    assert ingest.drain_inbox() == [], "a first sighting must never publish"
+    assert target.exists(), "and must not be archived"
+    assert vault.rows() == []
+
+    # The writer finishes.
+    target.write_text(_artifact("Complete Artifact", "the whole body, written fully"))
+
+    assert ingest.drain_inbox() == [], "changed since last seen, so it settles again"
+    results = ingest.drain_inbox()
+
+    assert [r["action"] for r in results] == ["created"]
+    assert [row["title"] for row in vault.rows()] == ["Complete Artifact"]
+    stored = (vault.content / vault.rows()[0]["filename"]).read_text()
+    assert "the whole body, written fully" in stored
+    assert "partial" not in stored, "the half-written version must never have landed"
+
+
+def test_F23_a_stable_file_publishes_on_the_second_poll(vault):
+    """The hold costs exactly one extra poll, not an unbounded wait."""
+    (vault.inbox / "ready.html").write_text(_artifact("Ready", "a complete body here"))
+
+    assert ingest.drain_inbox() == []
+    assert [r["action"] for r in ingest.drain_inbox()] == ["created"]
+    assert (vault.inbox / "_ingested" / "ready.html").exists()

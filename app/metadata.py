@@ -48,10 +48,29 @@ def slugify(text: str, fallback_seed: str = "") -> str:
     return text
 
 
+# Elements whose contents are markup being *displayed*, not markup being *applied*.
+# html.parser does not treat these as raw text the way it does <script>/<style>, so
+# an unescaped <meta> tag inside one is parsed as a live tag. That let an artifact
+# which merely DOCUMENTS the metadata contract claim another idea's slug -- and
+# because an explicit slug bypasses the collision guard by design (SPEC 2.4), the
+# documented example silently overwrote the idea it named.
+QUOTED_MARKUP = {"pre", "code", "textarea", "template", "xmp"}
+
+
 def _meta(soup: BeautifulSoup, name: str) -> str:
-    tag = soup.find("meta", attrs={"name": name})
-    if tag and tag.get("content"):
-        return tag["content"].strip()
+    """First idea:* value that is real metadata rather than a displayed example.
+
+    Deliberately not restricted to <head>: html.parser does not synthesise one, so
+    an artifact that opens with a bare meta block and no <head> wrapper would lose
+    all its metadata. Excluding quoted markup is the narrower rule -- the only
+    artifacts whose behaviour changes are the ones that were exploitable.
+    """
+    for tag in soup.find_all("meta", attrs={"name": name}):
+        if any(parent.name in QUOTED_MARKUP for parent in tag.parents):
+            continue
+        content = (tag.get("content") or "").strip()
+        if content:
+            return content
     return ""
 
 

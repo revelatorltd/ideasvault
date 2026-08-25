@@ -50,6 +50,16 @@ class Vault:
             headers=headers,
         )
 
+    def drain(self) -> list[dict]:
+        """Run the inbox to completion, which takes two polls.
+
+        drain_inbox holds a file until its size and mtime are stable across
+        consecutive scans, so a partially-written file is never published. The
+        first call registers what it saw; the second acts on it.
+        """
+        ingest.drain_inbox()
+        return ingest.drain_inbox()
+
     def rows(self) -> list[dict]:
         with db.conn() as c:
             return [dict(r) for r in c.execute("SELECT * FROM ideas ORDER BY slug")]
@@ -73,6 +83,7 @@ def vault(tmp_path, monkeypatch) -> Vault:
     content.mkdir(parents=True)
     inbox.mkdir(parents=True)
     ingest._FAILED.clear()  # module state; would leak between tests
+    ingest._PENDING.clear()
     db.init()
     return Vault(TestClient(main.app), content, inbox, tmp_path / "vault.db")
 

@@ -18,7 +18,10 @@ PUBLISH_TOKEN = os.environ.get("VAULT_TOKEN", "")
 VIEWER_LEVEL = os.environ.get("VAULT_VIEWER_LEVEL", "private")  # what a reader may see
 db.visible_at(VIEWER_LEVEL)  # fail at boot on a typo, not with a 500 on every page
 RAW_ORIGIN = os.environ.get("VAULT_RAW_ORIGIN", "")  # e.g. https://raw.ideas.example.com
-POLL_SECONDS = int(os.environ.get("VAULT_POLL_SECONDS", 3))
+POLL_SECONDS = int(os.environ.get("VAULT_POLL_SECONDS", 2))
+# 2, not 3: drain_inbox needs two consecutive identical observations before it
+# publishes, so pickup costs two polls. At 2s that is 4s worst case, which keeps
+# SPEC 5's "inbox pickup < 5s" promise intact.
 
 HERE = os.path.dirname(__file__)
 templates = Jinja2Templates(directory=os.path.join(HERE, "templates"))

@@ -2,6 +2,12 @@ services:
   vault:
     build: .
     restart: unless-stopped
+    # Run as you, not as root. The image has no USER, so without this every file
+    # the vault writes -- vault.db, every artifact, _ingested/ -- lands on the host
+    # owned by root:root and you need sudo to drop a file in your own inbox, to
+    # symlink a sync folder over it (M4.1), or to tar ./data (M6.1). Override in
+    # .env if your uid is not 1000: `id -u` and `id -g`.
+    user: "${VAULT_UID:-1000}:${VAULT_GID:-1000}"
     environment:
       VAULT_TOKEN: ${VAULT_TOKEN:?set VAULT_TOKEN in .env}
       VAULT_VIEWER_LEVEL: private
@@ -11,6 +17,15 @@ services:
       - ./inbox:/data/inbox   # drop .html files here to publish
     ports:
       - "127.0.0.1:8000:8000"
+    # python:3.12-slim ships no curl or wget, so the check is python itself.
+    # Makes `docker compose ps` mean something and gives M6.3 a local signal.
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3).status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   # Public ingress with no open ports and no certificates to manage.
   # Behind a profile so `docker compose up -d` at M2 starts the vault alone --

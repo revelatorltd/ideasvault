@@ -121,6 +121,14 @@ def _free_slug(slug: str, sha: str) -> str:
 # fixing it in place is still picked up.
 _FAILED: dict[str, tuple[int, int]] = {}
 
+# Files seen once but not yet published, and the size+mtime they were seen at. A
+# sync client that writes straight to notes.html rather than to a temp name can be
+# read halfway through, and drain_inbox archives the original immediately after, so
+# a truncated artifact would become the permanent copy with nothing to restore it
+# from. Publishing only once a file looks identical on two consecutive polls costs
+# one poll interval and removes that whole class of corruption.
+_PENDING: dict[str, tuple[int, int]] = {}
+
 
 def drain_inbox() -> list[dict]:
     """Publish every .html in the inbox, then move originals to _ingested/."""
@@ -133,6 +141,10 @@ def drain_inbox() -> list[dict]:
         fingerprint = (stat.st_size, stat.st_mtime_ns)
         if _FAILED.get(path.name) == fingerprint:
             continue  # already reported and unchanged, so there is nothing new to say
+        if _PENDING.get(path.name) != fingerprint:
+            _PENDING[path.name] = fingerprint
+            continue  # still settling; publish on the next poll if it has not moved
+        _PENDING.pop(path.name, None)
         try:
             # Check the size from stat before reading. publish() checks len() of the
             # bytes, which is too late: a 4GB drop would already be resident.
