@@ -58,9 +58,14 @@ what makes `reindex` idempotent, which matters more than the counter.
 
 Depends on U2 (both touch the same `db.upsert` / `ingest.publish` seam).
 
-- [ ] **Verify:** `pytest -q -k revision` exits 0. Explicitly: a changed body gives
+- [x] **Verify:** `pytest -q -k revision` exits 0. Explicitly: a changed body gives
   `revision` 2 (SPEC §7.4); identical bytes stay at 1 row and the same revision
   (§7.6); two consecutive reindexes leave every revision untouched.
+  **Done.** Both defects had one root cause, so one rule fixed both: only a
+  changed `sha256` bumps. Measured — new → 1, identical → 1, changed → 2,
+  three reindexes → still 2. `updated_at` is also left alone on a no-op, which
+  matters because `list_ideas` orders by `date DESC, updated_at DESC`: had
+  reindex kept touching it, card order would have shuffled on every rebuild.
 
 ## U4 — Fix F4: slug collision guard is narrower than SPEC §2.4
 

@@ -61,11 +61,22 @@ def upsert(meta, filename: str, size: int, sha: str) -> str:
             "SELECT sha256, revision FROM ideas WHERE slug = ?", (meta.slug,)
         ).fetchone()
         if existing:
+            # SPEC 2.2/2.4: revision counts CONTENT changes, not writes. The sha
+            # covers the whole file, so an unchanged sha means nothing about this
+            # artifact differs -- a byte-identical republish and a reindex must
+            # both leave revision and updated_at alone. Without this, reindex
+            # mutates every row it touches and is not a rebuild at all. The other
+            # columns are still written, so a filename that changed extension
+            # cannot go stale.
+            changed = existing["sha256"] != sha
+            touch = (
+                ", revision = revision + 1, updated_at = datetime('now')"
+                if changed else ""
+            )
             c.execute(
-                """UPDATE ideas SET title=?, description=?, tags_json=?, date=?,
-                       visibility=?, filename=?, bytes=?, sha256=?,
-                       updated_at=datetime('now'), revision=revision+1
-                   WHERE slug=?""",
+                f"""UPDATE ideas SET title=?, description=?, tags_json=?, date=?,
+                        visibility=?, filename=?, bytes=?, sha256=?{touch}
+                    WHERE slug=?""",
                 (meta.title, meta.description, json.dumps(meta.tags), meta.date,
                  meta.visibility, filename, size, sha, meta.slug),
             )
