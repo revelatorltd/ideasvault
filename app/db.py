@@ -98,10 +98,34 @@ def _row_to_dict(r: sqlite3.Row) -> dict:
     return d
 
 
+# What a reader at each ceiling may see. Defined once here and used by both the
+# query filter and the route guard -- two copies of this ladder is how they drift.
+VISIBLE_AT = {
+    "public": ("public",),
+    "internal": ("public", "internal"),
+    "private": ("public", "internal", "private"),
+}
+
+
+def visible_at(level: str) -> tuple[str, ...]:
+    """Resolve a viewer ceiling to the visibilities it may see.
+
+    Raises ValueError on an unknown level. main.py calls this at import so a typo
+    in VAULT_VIEWER_LEVEL stops the container with an explanation, rather than
+    booting happily and then raising KeyError on every single page.
+    """
+    try:
+        return VISIBLE_AT[level]
+    except KeyError:
+        raise ValueError(
+            f"VAULT_VIEWER_LEVEL is {level!r}, which is not one of "
+            f"{', '.join(sorted(VISIBLE_AT))}. Fix it in .env, or unset it to "
+            f"default to private."
+        ) from None
+
+
 def list_ideas(max_visibility: str = "private") -> list[dict]:
-    allowed = {"public": ("public",),
-               "internal": ("public", "internal"),
-               "private": ("public", "internal", "private")}[max_visibility]
+    allowed = visible_at(max_visibility)
     placeholders = ",".join("?" * len(allowed))
     with conn() as c:
         rows = c.execute(

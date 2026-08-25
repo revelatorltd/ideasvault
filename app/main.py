@@ -16,6 +16,7 @@ from . import db, ingest
 
 PUBLISH_TOKEN = os.environ.get("VAULT_TOKEN", "")
 VIEWER_LEVEL = os.environ.get("VAULT_VIEWER_LEVEL", "private")  # what a reader may see
+db.visible_at(VIEWER_LEVEL)  # fail at boot on a typo, not with a 500 on every page
 RAW_ORIGIN = os.environ.get("VAULT_RAW_ORIGIN", "")  # e.g. https://raw.ideas.example.com
 POLL_SECONDS = int(os.environ.get("VAULT_POLL_SECONDS", 3))
 
@@ -138,6 +139,4 @@ def api_delete(slug: str):
 
 
 def _allowed() -> tuple[str, ...]:
-    return {"public": ("public",),
-            "internal": ("public", "internal"),
-            "private": ("public", "internal", "private")}[VIEWER_LEVEL]
+    return db.visible_at(VIEWER_LEVEL)

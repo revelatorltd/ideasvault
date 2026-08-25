@@ -155,4 +155,25 @@ the only thing standing between `idea:slug` and the filesystem):
 - `/raw/{slug}` builds its path from the DB `filename` column, which only ever
   holds `dest.name` or a globbed `path.name`. No traversal reachable.
 
+**F11 — one bad inbox file logged a failure every poll, forever.** A bad file stays
+in the inbox by design (SPEC §6) and the poller runs every `VAULT_POLL_SECONDS`,
+so a single empty file produced ~29,000 identical log lines a day. Measured
+before: `failed: empty.html` twice in 6 seconds. Now fingerprinted by size+mtime
+and reported once — measured after: **1 line across 12 polls**, the file still
+left in place, and fixing it in place picked up on the next pass.
+
+**F12 — a typo in `VAULT_VIEWER_LEVEL` took every page down with a 500.** The value
+was read straight into a dict subscript with no validation, so `publik` booted
+happily and then raised `KeyError` on `/`, `/i/`, `/raw/` and `/api/ideas`. Now
+validated at import, so the container refuses to start with:
+
+```
+ValueError: VAULT_VIEWER_LEVEL is 'publik', which is not one of internal,
+private, public. Fix it in .env, or unset it to default to private.
+```
+
+The visibility ladder was also duplicated between `db.list_ideas` and
+`main._allowed`; it now has one definition, since two copies is how a query
+filter and a route guard drift apart on a privacy boundary.
+
 <!-- WORKFLOW RESULTS APPENDED BELOW -->

@@ -427,3 +427,69 @@ def test_slug_cannot_escape_the_content_directory(vault):
         assert "/" not in slug and "\\" not in slug and ".." not in slug, slug
         written = (vault.content / f"{slug}.html").resolve()
         assert written.parent == vault.content.resolve(), f"escaped to {written}"
+
+
+def test_F11_a_permanently_bad_inbox_file_is_reported_once(vault):
+    """REGRESSION GUARD F11.
+
+    A bad file stays in the inbox by design (SPEC 6) and the poller runs every
+    VAULT_POLL_SECONDS, so re-reporting it every pass means ~29,000 identical log
+    lines a day from one empty file.
+    """
+    (vault.inbox / "empty.html").write_text("")
+
+    first = ingest.drain_inbox()
+    assert [r["action"] for r in first] == ["failed"]
+
+    for _ in range(5):
+        assert ingest.drain_inbox() == [], "an unchanged bad file must not re-report"
+
+    assert (vault.inbox / "empty.html").exists(), "but it must still be left in place"
+
+
+def test_F11_fixing_a_bad_inbox_file_in_place_is_picked_up(vault):
+    """The quiet must not be permanent -- SPEC 6's recovery is "inspect and fix"."""
+    bad = vault.inbox / "fixme.html"
+    bad.write_text("")
+    assert [r["action"] for r in ingest.drain_inbox()] == ["failed"]
+    assert ingest.drain_inbox() == []
+
+    bad.write_text(_artifact("Fixed Now", "a real body this time"))
+
+    results = ingest.drain_inbox()
+    assert [r["action"] for r in results] == ["created"]
+    assert not bad.exists(), "it published, so it moved to _ingested/"
+    assert (vault.inbox / "_ingested" / "fixme.html").exists()
+
+
+def test_F12_a_typo_in_viewer_level_is_rejected_loudly(vault):
+    """REGRESSION GUARD F12.
+
+    VAULT_VIEWER_LEVEL was read straight into a dict subscript, so `publik` booted
+    fine and then raised KeyError on every page. main.py now validates at import;
+    this covers the resolver it validates through.
+    """
+    import pytest as _pytest
+
+    for level in ("private", "internal", "public"):
+        assert db.visible_at(level)
+
+    with _pytest.raises(ValueError) as exc:
+        db.visible_at("publik")
+    message = str(exc.value)
+    assert "publik" in message, "say what was wrong"
+    assert "private" in message and "internal" in message, "and what the options are"
+
+
+def test_F12_the_visibility_ladder_has_one_definition(vault):
+    """Two copies of the ladder is how the query filter and route guard drift."""
+    import inspect
+    assert "VISIBLE_AT" not in inspect.getsource(main._allowed)
+    assert inspect.getsource(main._allowed).count("db.visible_at") == 1
+
+    for level, expected in [
+        ("public", ("public",)),
+        ("internal", ("public", "internal")),
+        ("private", ("public", "internal", "private")),
+    ]:
+        assert db.visible_at(level) == expected

@@ -89,6 +89,14 @@ def _free_slug(slug: str, sha: str) -> str:
     )
 
 
+# Files that failed, and the size+mtime they failed at. A bad file stays in the
+# inbox by design (SPEC 6), and the poller runs every VAULT_POLL_SECONDS, so
+# without this one empty file reports a failure every 3 seconds forever -- about
+# 29,000 log lines a day saying the same thing. Cleared when the file changes, so
+# fixing it in place is still picked up.
+_FAILED: dict[str, tuple[int, int]] = {}
+
+
 def drain_inbox() -> list[dict]:
     """Publish every .html in the inbox, then move originals to _ingested/."""
     results = []
@@ -96,10 +104,16 @@ def drain_inbox() -> list[dict]:
         return results
     ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
     for path in _artifact_files(INBOX_DIR):
+        stat = path.stat()
+        fingerprint = (stat.st_size, stat.st_mtime_ns)
+        if _FAILED.get(path.name) == fingerprint:
+            continue  # already reported and unchanged, so there is nothing new to say
         try:
             results.append(publish(path.read_bytes(), filename=path.name))
             shutil.move(str(path), str(ARCHIVE_DIR / path.name))
+            _FAILED.pop(path.name, None)
         except Exception as exc:  # keep the file so the failure is inspectable
+            _FAILED[path.name] = fingerprint
             results.append({"action": "failed", "file": path.name, "error": str(exc)})
     return results
 

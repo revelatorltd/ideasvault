@@ -72,6 +72,7 @@ def vault(tmp_path, monkeypatch) -> Vault:
     monkeypatch.setattr(main, "VIEWER_LEVEL", "private")
     content.mkdir(parents=True)
     inbox.mkdir(parents=True)
+    ingest._FAILED.clear()  # module state; would leak between tests
     db.init()
     return Vault(TestClient(main.app), content, inbox, tmp_path / "vault.db")
 
