@@ -126,4 +126,33 @@ An orientation workflow mapped all seven areas (metadata, db, ingest, main, view
 mcp, ops) and adversarially verified each candidate defect — default position that
 the claim is wrong, real output required to confirm. Results appended below.
 
+### Found by my own adversarial pass while the workflow ran
+
+**F8 — the bearer token comparison is not constant-time.** SPEC §4 says "Bearer
+token, constant comparison against `VAULT_TOKEN`". The code used `!=` on `str`,
+which short-circuits at the first differing byte and leaks the length of the
+shared prefix. Fixed with `secrets.compare_digest` — stdlib, no new dependency.
+
+**F9 — `reindex` produced slugs that violate SPEC §2.3.** It used `path.stem`
+verbatim. Files on disk are truth and disk names are arbitrary, so a restored
+backup or hand-copied artifact called `A Capital File.html` became the slug
+`A Capital File` — spaces and capitals in a URL, against §2.3's `[a-z0-9-]`.
+Observed on four hostile filenames, all invalid. Now slugified (idempotent, so
+normally-published slugs never churn); the real filename is still recorded in
+`filename` so `/raw/` serves it.
+
+**F10 — `Path.glob("*.htm*")` is case-sensitive on Linux, so `RESTORED.HTML` was
+never indexed at all.** Four files on disk produced three rows. An artifact
+sitting on disk that never appears anywhere is an invariant 1 failure, and
+restored files are exactly the case invariant 1 exists for. Replaced with a
+case-insensitive scan.
+
+**Checked and clean** (no defect, regression tests added anyway since `slugify` is
+the only thing standing between `idea:slug` and the filesystem):
+- Path traversal via `idea:slug` — `../../etc/passwd` → `etcpasswd`,
+  `/absolute/path` → `absolutepath`. Every write resolves inside `content/`.
+- Jinja autoescape is **on**, and neither template uses `|safe` or `innerHTML`.
+- `/raw/{slug}` builds its path from the DB `filename` column, which only ever
+  holds `dest.name` or a globbed `path.name`. No traversal reachable.
+
 <!-- WORKFLOW RESULTS APPENDED BELOW -->

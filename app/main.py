@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+import secrets
 
 from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
@@ -25,7 +26,10 @@ templates = Jinja2Templates(directory=os.path.join(HERE, "templates"))
 def require_token(authorization: str = Header(default="")) -> None:
     if not PUBLISH_TOKEN:
         raise HTTPException(503, "VAULT_TOKEN is not set, so publishing is disabled.")
-    if authorization.removeprefix("Bearer ").strip() != PUBLISH_TOKEN:
+    presented = authorization.removeprefix("Bearer ").strip()
+    # SPEC 4: "constant comparison against VAULT_TOKEN". `!=` on str short-circuits
+    # at the first differing byte and leaks the length of the shared prefix.
+    if not secrets.compare_digest(presented, PUBLISH_TOKEN):
         raise HTTPException(401, "That token is not valid for publishing.")
 
 

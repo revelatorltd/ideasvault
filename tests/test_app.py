@@ -351,3 +351,79 @@ def test_F7_reindex_drops_rows_whose_artifact_is_gone(vault):
     assert vault.client.get("/raw/doomed").status_code == 404, (
         "after the advice is followed the stale row is gone, so it is a 404 not a 410"
     )
+
+
+def test_F8_token_comparison_is_constant_time(vault):
+    """REGRESSION GUARD F8. SPEC 4: "constant comparison against VAULT_TOKEN".
+
+    `!=` on str short-circuits at the first differing byte. Asserting on timing is
+    flaky, so this asserts on the mechanism: require_token must route through
+    secrets.compare_digest.
+    """
+    import inspect
+    src = inspect.getsource(main.require_token)
+    assert "compare_digest" in src, "SPEC 4 requires a constant-time comparison"
+
+    # Behaviour must be unchanged by the mechanism.
+    assert vault.publish(_artifact("T", "b"), token="wrong").status_code == 401
+    assert vault.publish(_artifact("T", "b"), token=vault.token).status_code == 201
+
+
+def test_F9_reindex_slugs_are_spec_valid_for_any_filename(vault):
+    """REGRESSION GUARD F9. Files on disk are truth, and disk names are arbitrary.
+
+    A restored backup or hand-copied artifact can be called anything. reindex used
+    path.stem verbatim, so "My Notes.html" became the slug "My Notes" -- spaces and
+    capitals in a URL, violating SPEC 2.3's [a-z0-9-] constraint.
+    """
+    body = "<html><head><title>T</title></head><body><p>body</p></body></html>"
+    for name in ["A Capital File.html", "has spaces.html", "Unïcode Näme.html"]:
+        (vault.content / name).write_text(body)
+
+    r = vault.client.post("/api/reindex", headers=vault.auth)
+    assert r.status_code == 200
+
+    for row in vault.rows():
+        slug = row["slug"]
+        assert slug == slug.lower(), f"{slug!r} is not lowercased"
+        assert all(c.isalnum() or c == "-" for c in slug), f"{slug!r} violates SPEC 2.3"
+        assert slug.isascii(), f"{slug!r} is not ascii"
+        # The real filename is still recorded, so /raw/ can serve it.
+        assert (vault.content / row["filename"]).exists()
+
+
+def test_F9_reindex_does_not_rewrite_normal_slugs(vault):
+    """slugify must be idempotent, or reindex would churn every published slug."""
+    vault.publish(_artifact("Normal Idea", "body"))
+    before = [r["slug"] for r in vault.rows()]
+    vault.client.post("/api/reindex", headers=vault.auth)
+    assert [r["slug"] for r in vault.rows()] == before == ["normal-idea"]
+
+
+def test_F10_uppercase_extensions_are_indexed(vault):
+    """REGRESSION GUARD F10. Path.glob is case-sensitive on Linux.
+
+    A restored file named RESTORED.HTML was skipped entirely, so an artifact on
+    disk never appeared anywhere -- an invariant 1 failure.
+    """
+    (vault.content / "RESTORED.HTML").write_text(
+        "<html><head><title>Restored</title></head><body><p>body</p></body></html>"
+    )
+    r = vault.client.post("/api/reindex", headers=vault.auth)
+
+    assert r.json()["indexed"] == 1, "the .HTML file must be seen"
+    assert [row["slug"] for row in vault.rows()] == ["restored"]
+    assert vault.client.get("/raw/restored").status_code == 200
+
+
+def test_slug_cannot_escape_the_content_directory(vault):
+    """slugify is the only thing standing between idea:slug and the filesystem."""
+    for evil in ["../../etc/passwd", "..\\..\\windows", "/absolute/path", "a/../../b"]:
+        r = vault.publish(
+            _artifact("Evil", "body", slug=evil), filename="evil.html"
+        )
+        assert r.status_code in (200, 201), r.text
+        slug = r.json()["slug"]
+        assert "/" not in slug and "\\" not in slug and ".." not in slug, slug
+        written = (vault.content / f"{slug}.html").resolve()
+        assert written.parent == vault.content.resolve(), f"escaped to {written}"

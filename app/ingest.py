@@ -45,6 +45,22 @@ def publish(html_bytes: bytes, filename: str = "") -> dict:
             "tags": meta.tags, "date": meta.date, "url": f"/i/{meta.slug}"}
 
 
+def _artifact_files(directory: pathlib.Path) -> list[pathlib.Path]:
+    """Artifact files in `directory`, matched case-insensitively.
+
+    Path.glob is case-sensitive on Linux, so `*.htm*` silently skips a file named
+    RESTORED.HTML. An artifact sitting on disk that never reaches the index is an
+    invariant 1 failure, and hand-copied or restored files are exactly the case
+    invariant 1 exists for.
+    """
+    if not directory.exists():
+        return []
+    return sorted(
+        p for p in directory.iterdir()
+        if p.is_file() and p.suffix.lower() in {".html", ".htm"}
+    )
+
+
 def _sha_of(path: pathlib.Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -79,7 +95,7 @@ def drain_inbox() -> list[dict]:
     if not INBOX_DIR.exists():
         return results
     ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
-    for path in sorted(INBOX_DIR.glob("*.htm*")):
+    for path in _artifact_files(INBOX_DIR):
         try:
             results.append(publish(path.read_bytes(), filename=path.name))
             shutil.move(str(path), str(ARCHIVE_DIR / path.name))
@@ -95,10 +111,14 @@ def reindex() -> int:
     without an artifact is dropped. Revisions are preserved -- see SPEC 2.2.
     """
     seen: set[str] = set()
-    for path in sorted(CONTENT_DIR.glob("*.htm*")):
+    for path in _artifact_files(CONTENT_DIR):
         raw = path.read_bytes()
         meta = metadata.parse(raw.decode("utf-8", errors="replace"), filename=path.name)
-        meta.slug = path.stem  # filename on disk is the source of truth for slug
+        # The filename on disk is the source of truth for the slug, but it still has
+        # to BE a slug: a restored or hand-copied file may be called "My Notes.HTML",
+        # and path.stem verbatim would put spaces and capitals in a URL, violating
+        # SPEC 2.3. slugify is idempotent, so normally-published files are unchanged.
+        meta.slug = metadata.slugify(path.stem, fallback_seed=path.name)
         db.upsert(meta, filename=path.name, size=len(raw),
                   sha=hashlib.sha256(raw).hexdigest())
         seen.add(meta.slug)
