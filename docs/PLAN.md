@@ -12,7 +12,7 @@ usable vault.** Everything after that is compounding value, not prerequisite.
 
 ## M0 — Orient (20 min, no code)
 
-- [ ] **0.1** Read `CLAUDE.md`, `docs/PRD.md`, `docs/SPEC.md`
+- [x] **0.1** Read `CLAUDE.md`, `docs/PRD.md`, `docs/SPEC.md`
 
 > Read CLAUDE.md, docs/PRD.md and docs/SPEC.md, then walk the code in app/.
 > Give me a file-by-file summary of what exists, and list any place where the
@@ -20,6 +20,47 @@ usable vault.** Everything after that is compounding value, not prerequisite.
 
 **Accept:** a summary naming all five modules, plus either a list of discrepancies or
 an explicit statement that there are none.
+
+**Done.** All five modules present and matching the spec's shape: `metadata.py`
+(parse + fallback chains, never raises), `db.py` (schema, upsert, visibility-filtered
+list, get, delete), `ingest.py` (single `publish()` path, `drain_inbox`, `reindex`),
+`main.py` (8 routes, token dependency, inbox poller, boot auto-reindex), and the
+templates/static layer (`index.html`, `detail.html`, `style.css`).
+
+Six discrepancies found. Numbering kept for reference in later tasks:
+
+1. **`reindex` inflates `revision`.** It calls `db.upsert`, which always takes the
+   UPDATE branch and does `revision=revision+1`. A no-op reindex moved an idea 2 → 3.
+   **Resolved by decision:** `revision` counts content changes, not writes. SPEC §2.2
+   now carries the exemption; `reindex` and identical-sha republish must preserve it.
+   Fix in 1.2.
+2. **Byte-identical republish bumps `revision`,** contradicting SPEC §2.4's "no-op
+   update either way". `publish` computes the sha but only uses it for the collision
+   guard, never to short-circuit. Same decision as #1. Fix in 1.2.
+3. **~~SPEC §7 test 14 is unsatisfiable~~ — withdrawn.** A prior session claimed no
+   file can fail the inbox path. Not so: an *empty* file fails closed and is left in
+   place, while good and malformed files both publish and archive. Test 14 passes as
+   written. SPEC §6 and §7.14 reworded to say "empty or oversized" rather than
+   "unparseable", since malformed HTML publishing is invariant 4 working correctly.
+4. **Slug collision guard is narrower than SPEC §2.4.** `ingest.py` ANDs an on-disk
+   sha check onto the spec's condition, so a stale or rebuilt index can let
+   `dest.write_bytes` overwrite a different artifact — the one loss invariant 1
+   exists to prevent. Fix in 1.2.
+5. **`tunnel` will crash-loop at 2.1.** No `profiles:` key and no `:?` guard on
+   `CF_TUNNEL_TOKEN`, so it starts three milestones before M3 creates the tunnel.
+   Fix in 2.0.
+6. **`POST /api/reindex` 500s when `vault.db` has been deleted** —
+   `sqlite3.OperationalError: no such table: ideas`. `db.init()` runs only in the boot
+   lifespan, so reindex alone cannot rebuild a missing index. **SPEC §7 test 11 fails
+   as written**, and this is invariant 1's headline promise. Missed previously because
+   the check deleted the DB and rebooted, which does call `init()`. Fix in 1.2.
+
+Smaller notes: all routes are GET-only, so `HEAD /raw/…` returns 405 — configure the
+6.3 monitor for GET. `detail.html` omits Inter from its font link while `style.css`
+asks for it, so the detail page silently falls back to `system-ui`; fix in 2.0.
+`.env.example` ships `VAULT_TOKEN=change-me-long-random-string`, a known value that
+would leave writes open if copied unchanged — prefer an empty value so SPEC §4's
+fail-closed 503 triggers instead; fix in 2.0.
 
 ---
 
@@ -49,6 +90,18 @@ identical results (no ordering dependence).
 ---
 
 ## M2 — Run it locally and file real artifacts (30 min)
+
+- [ ] **2.0** Clear the blockers 0.1 found before booting compose
+
+Three small fixes, all outside `app/`:
+- `docker-compose.yml`: add `profiles: ["edge"]` to the `tunnel` service and a
+  `:?` guard on `CF_TUNNEL_TOKEN`, so 2.1 does not crash-loop it (finding 5).
+- `app/templates/detail.html`: add `Inter` to the font link to match `style.css`.
+- `.env.example`: blank the `VAULT_TOKEN` placeholder so a copied-but-unedited
+  file fails closed with 503 rather than opening writes on a known token.
+
+**Accept:** `docker compose config --profiles` lists `edge`; `docker compose up -d`
+starts `vault` only. `grep Inter app/templates/detail.html` matches.
 
 - [ ] **2.1** Boot via compose
 

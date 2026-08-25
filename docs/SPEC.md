@@ -52,6 +52,13 @@ CREATE INDEX ideas_date ON ideas(date DESC);
 Every column is derivable from the artifact file plus filesystem metadata. That is the
 constraint that keeps `reindex` total.
 
+**One exemption: `revision`.** It counts content changes, not writes, and so cannot be
+derived from a single file. It bumps only when the artifact's `sha256` changes; a
+byte-identical republish and a `reindex` both preserve it. This keeps `reindex`
+idempotent, which matters more than the counter does — an index rebuild that mutates
+data is not a rebuild. The cost is bounded: on total volume loss `revision` resets to
+1, which is the one scenario where everything else is gone too.
+
 ### 2.3 Metadata contract
 
 ```html
@@ -184,7 +191,7 @@ server-side filtering and pagination; the schema already supports it.
 | Malformed HTML | Publishes with fallback metadata | None needed |
 | Row exists, file missing | `410` with an instruction | `POST /api/reindex` |
 | Index corrupt or deleted | Empty index at boot triggers auto-reindex | Automatic |
-| Inbox file unparseable | Stays in `inbox/`, logged as `failed` | Inspect and fix |
+| Inbox file empty or oversized | Stays in `inbox/`, logged as `failed` | Inspect and fix |
 | Oversized upload | `400` with the actual size and the limit | Split or raise limit |
 | Duplicate title, different content | Second gets `-<hash6>` suffix | None needed |
 | Volume lost | Total loss | Restore `./data/` — the only DR path |
@@ -206,4 +213,6 @@ server-side filtering and pagination; the schema already supports it.
 11. Reindex: deleting `vault.db` and reindexing restores every row
 12. Visibility: `VAULT_VIEWER_LEVEL=public` hides private ideas from index, detail, and raw
 13. Limits: oversized upload rejected with 400
-14. Inbox: `drain_inbox` publishes and archives; a bad file is left in place
+14. Inbox: `drain_inbox` publishes and archives; a bad file is left in place.
+    Note: malformed HTML is not "bad" — invariant 4 means it publishes with fallbacks.
+    Use an empty file, the one input that fails and so stays put.
