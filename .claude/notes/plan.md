@@ -94,10 +94,23 @@ Three fixes outside `app/` logic:
 - `.env.example`: blank the `VAULT_TOKEN` placeholder so a copied-but-unedited file
   fails closed with 503 instead of opening writes on a known token.
 
-- [ ] **Verify:** `docker compose config` parses and shows `tunnel` under profile
+- [x] **Verify:** `docker compose config` parses and shows `tunnel` under profile
   `edge` (falling back to a YAML+grep assertion if no Docker daemon is available —
   there is none in this container); `grep Inter app/templates/detail.html` matches;
   `grep -E '^VAULT_TOKEN=$' .env.example` matches.
+  **Done.** The compose *CLI* parses without a daemon, so this was verified
+  properly rather than by grep:
+  - `docker compose config --services` → `vault` only (the M2 path)
+  - `docker compose --profile edge config --services` → `vault`, `tunnel` (M3)
+  - `docker compose config --profiles` → `edge`
+  - empty `VAULT_TOKEN` → rejected, so the blanked `.env.example` fails closed
+  - `style.css` wants 3 font families, `detail.html` now loads all 3, gap none
+
+  **My first attempt at this unit introduced a worse bug and the verification
+  caught it.** I put a `:?` required-variable guard on `CF_TUNNEL_TOKEN`. Compose
+  interpolates every service regardless of active profile, so that made plain
+  `docker compose up -d` fail outright at M2 — worse than the crash-loop being
+  fixed. Replaced with `:-` and a comment recording why a guard cannot go there.
 
 ## U6 — Merge the independent sweep
 
