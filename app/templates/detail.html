@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ idea.title }} — Ideas Vault</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500&family=Inter:wght@400;500&family=IBM+Plex+Mono:wght@400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="reading">
+<nav class="bar">
+  <a class="back" href="/"><span aria-hidden="true">&larr;</span> Vault</a>
+  <div class="bar-title">
+    <h1>{{ idea.title }}</h1>
+    <p class="bar-meta">
+      <time datetime="{{ idea.date }}">{{ idea.date }}</time>
+      {% for t in idea.tags %}<span>{{ t }}</span>{% endfor %}
+    </p>
+  </div>
+  <a class="rawlink" href="{{ raw_url }}" target="_blank" rel="noopener">
+    Open full page <span aria-hidden="true">&#8599;</span>
+  </a>
+</nav>
+<iframe class="stage" src="{{ raw_url }}" title="{{ idea.title }}"
+        sandbox="allow-scripts allow-popups allow-forms" loading="eager"></iframe>
+</body>
+</html>

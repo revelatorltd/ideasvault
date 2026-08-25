@@ -1,0 +1,57 @@
+{
+  "name": "Ideas Vault",
+
+  // Python 3.12 to match the Dockerfile's `FROM python:3.12-slim` and CLAUDE.md.
+  // The app is 3.10+ compatible, but pinning the same minor here keeps the
+  // devcontainer honest about what the deployed image actually runs.
+  "image": "mcr.microsoft.com/devcontainers/python:3.12",
+
+  "features": {
+    "ghcr.io/anthropics/devcontainer-features/claude-code:1.0": {},
+    // PLAN M2.1 is `docker compose up -d --build`, which needs a daemon inside the
+    // container. Drop this feature if you would rather run compose on the host.
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+  },
+
+  // Keeps Claude Code's config across rebuilds instead of re-authenticating.
+  "mounts": [
+    "source=claude-config-${devcontainerId},target=/home/vscode/.claude,type=volume"
+  ],
+
+  "containerEnv": {
+    "CLAUDE_CONFIG_DIR": "/home/vscode/.claude",
+
+    // Without these the app defaults to /data and tries to write outside the
+    // workspace on the first request. CLAUDE.md calls this out for local dev.
+    // Absolute, not the ./dev/... form from the README, so they hold no matter
+    // which directory a command is run from. `dev/` is already gitignored.
+    "VAULT_DB": "${containerWorkspaceFolder}/dev/vault.db",
+    "VAULT_CONTENT": "${containerWorkspaceFolder}/dev/content",
+    "VAULT_INBOX": "${containerWorkspaceFolder}/dev/inbox",
+
+    // Dev-only. Writes return 503 with no token (SPEC 4 fails closed), which
+    // would make the container useless for development. This value never reaches
+    // a deployment: compose reads VAULT_TOKEN from .env, which is gitignored.
+    "VAULT_TOKEN": "devtoken"
+  },
+
+  // uvicorn's port from CLAUDE.md's dev command.
+  "forwardPorts": [8000],
+  "portsAttributes": {
+    "8000": { "label": "vault", "onAutoForward": "notify" }
+  },
+
+  // Both files: requirements.txt is the five runtime packages the image ships,
+  // requirements-dev.txt is pytest and httpx, which are test-only by design.
+  "postCreateCommand": "pip install --user -r requirements.txt -r requirements-dev.txt",
+
+  "customizations": {
+    "vscode": {
+      "extensions": ["ms-python.python", "ms-python.debugpy"],
+      "settings": {
+        "python.testing.pytestEnabled": true,
+        "python.testing.pytestArgs": ["tests"]
+      }
+    }
+  }
+}

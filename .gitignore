@@ -1,0 +1,8 @@
+.env
+data/
+dev/
+inbox/*.htm*
+inbox/_ingested/
+__pycache__/
+*.pyc
+.pytest_cache/

@@ -1,0 +1,30 @@
+services:
+  vault:
+    build: .
+    restart: unless-stopped
+    environment:
+      VAULT_TOKEN: ${VAULT_TOKEN:?set VAULT_TOKEN in .env}
+      VAULT_VIEWER_LEVEL: private
+      # VAULT_RAW_ORIGIN: https://raw.ideas.example.com   # see README: origin isolation
+    volumes:
+      - ./data:/data          # vault.db + content/ live here; back this folder up
+      - ./inbox:/data/inbox   # drop .html files here to publish
+    ports:
+      - "127.0.0.1:8000:8000"
+
+  # Public ingress with no open ports and no certificates to manage.
+  # Behind a profile so `docker compose up -d` at M2 starts the vault alone --
+  # without this the service crash-loops three milestones before M3 creates the
+  # tunnel. Bring it up at M3 with: docker compose --profile edge up -d
+  #
+  # No `:?` guard on CF_TUNNEL_TOKEN, deliberately: compose interpolates every
+  # service regardless of active profile, so a required-variable guard here makes
+  # plain `docker compose up -d` fail at M2 with a missing-variable error. The
+  # `:-` default keeps parsing clean; cloudflared reports a missing token itself
+  # when the edge profile is actually started.
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    profiles: ["edge"]
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run --token ${CF_TUNNEL_TOKEN:-}
+    depends_on: [vault]

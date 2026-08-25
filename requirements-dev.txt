@@ -1,0 +1,5 @@
+# Test-only. Deliberately NOT in requirements.txt: CLAUDE.md pins the runtime
+# dependency list at five packages and the Dockerfile installs from that file,
+# so nothing here ships in the image.
+pytest==8.3.4
+httpx==0.28.1        # required by fastapi.testclient, which PLAN M1.1 mandates
