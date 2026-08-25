@@ -307,3 +307,47 @@ def test_delete_removes_both_the_row_and_the_file(vault):
 def test_delete_of_an_unknown_slug_is_404(vault):
     r = vault.client.delete("/api/ideas/ghost", headers=vault.auth)
     assert r.status_code == 404
+
+
+def test_F6_reads_survive_the_index_being_deleted(vault):
+    """REGRESSION GUARD F6, wider than SPEC 7.11.
+
+    The index is disposable by design, so vault.db can vanish while the process
+    is running. Before the fix, db.init() ran only in the boot lifespan, so every
+    read raised "no such table: ideas" and GET / and GET /i/ returned 500.
+    """
+    vault.publish(_artifact("Alive", "body", slug="alive"))
+    vault.db_path.unlink()
+
+    assert vault.client.get("/").status_code == 200
+    assert vault.client.get("/healthz").status_code == 200
+    assert vault.client.get("/api/ideas").status_code == 200
+    # The row is gone with the index, so this is a legitimate 404, not a 500.
+    assert vault.client.get("/i/alive").status_code == 404
+
+    r = vault.client.post("/api/reindex", headers=vault.auth)
+    assert r.status_code == 200
+    assert vault.client.get("/i/alive").status_code == 200
+
+
+def test_F7_reindex_drops_rows_whose_artifact_is_gone(vault):
+    """REGRESSION GUARD F7. reindex must be total, or the 410 advice is a lie.
+
+    /raw/ answers 410 "Run POST /api/reindex" when a row has no file. If reindex
+    only ever inserts, that instruction never clears the row and the user is
+    told to run something that cannot help.
+    """
+    vault.publish(_artifact("Keeper", "body", slug="keeper"))
+    vault.publish(_artifact("Doomed", "body", slug="doomed"))
+
+    (vault.content / "doomed.html").unlink()  # removed outside the app
+    assert vault.client.get("/raw/doomed").status_code == 410
+
+    r = vault.client.post("/api/reindex", headers=vault.auth)
+    assert r.status_code == 200
+    assert r.json()["indexed"] == 1, "only the surviving artifact is indexed"
+
+    assert [row["slug"] for row in vault.rows()] == ["keeper"]
+    assert vault.client.get("/raw/doomed").status_code == 404, (
+        "after the advice is followed the stale row is gone, so it is a 404 not a 410"
+    )

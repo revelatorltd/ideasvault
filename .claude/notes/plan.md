@@ -33,8 +33,22 @@ This is invariant 1's headline promise and SPEC §7 test 11.
 Smallest fix: make the schema self-healing rather than boot-dependent. Must not add a
 second write path (invariant 2).
 
-- [ ] **Verify:** `pytest -q -k "reindex or invariant1"` exits 0, and by hand:
+- [x] **Verify:** `pytest -q -k "reindex or invariant1"` exits 0, and by hand:
   publish, delete `$VAULT_DB`, `POST /api/reindex` → 200 with every row restored.
+  **Done.** `test_7_11`, `test_F6_*` and `test_F7_*` pass. By hand: `GET /` 200
+  after deleting `vault.db` (was 500), `POST /api/reindex` → `{"indexed":2}`,
+  both titles restored.
+
+  Scope grew twice during this unit, both confirmed by probe:
+  - **F6 was wider than SPEC §7.11.** `list_ideas` and `get` raised too, so
+    `GET /` and `GET /i/{slug}` also 500'd after a DB deletion. Fixed at
+    `db.conn()` — every connection now ensures the schema, because the index is
+    disposable and the file can vanish mid-process. A once-per-process flag
+    would not survive exactly the scenario the test covers.
+  - **F7 (new): `reindex` was not total.** It only inserted, so a row whose
+    artifact was deleted outside the app survived forever — making `/raw/`'s
+    410 "Run POST /api/reindex" advice impossible to follow. Added `db.prune()`;
+    reindex now drops rows with no file. Verified: 410 → reindex → 404.
 
 ## U3 — Fix F1 + F2: `revision` counts content changes, not writes
 

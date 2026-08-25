@@ -68,13 +68,18 @@ def drain_inbox() -> list[dict]:
 
 
 def reindex() -> int:
-    """Rebuild the index from content/ on disk. The DB is always disposable."""
-    count = 0
+    """Rebuild the index from content/ on disk. The DB is always disposable.
+
+    Total in both directions: every artifact on disk gets a row, and every row
+    without an artifact is dropped. Revisions are preserved -- see SPEC 2.2.
+    """
+    seen: set[str] = set()
     for path in sorted(CONTENT_DIR.glob("*.htm*")):
         raw = path.read_bytes()
         meta = metadata.parse(raw.decode("utf-8", errors="replace"), filename=path.name)
         meta.slug = path.stem  # filename on disk is the source of truth for slug
         db.upsert(meta, filename=path.name, size=len(raw),
                   sha=hashlib.sha256(raw).hexdigest())
-        count += 1
-    return count
+        seen.add(meta.slug)
+    db.prune(seen)
+    return len(seen)

@@ -27,6 +27,13 @@ CREATE TABLE IF NOT EXISTS ideas (
 CREATE INDEX IF NOT EXISTS ideas_date ON ideas(date DESC);
 """
 
+# Executed on every connection, not just at boot. The index is disposable by
+# design, so vault.db may be deleted while the process is running -- if the
+# schema were only created in init() every later query would raise "no such
+# table: ideas" until a restart. Both statements are IF NOT EXISTS, so this is a
+# cheap no-op once the table is there.
+_ENSURE = [s.strip() for s in SCHEMA.strip().split(";") if s.strip()]
+
 
 @contextmanager
 def conn():
@@ -34,6 +41,8 @@ def conn():
     c = sqlite3.connect(DB_PATH)
     c.row_factory = sqlite3.Row
     try:
+        for statement in _ENSURE:
+            c.execute(statement)
         yield c
         c.commit()
     finally:
@@ -101,3 +110,20 @@ def get(slug: str) -> dict | None:
 def delete(slug: str) -> bool:
     with conn() as c:
         return c.execute("DELETE FROM ideas WHERE slug = ?", (slug,)).rowcount > 0
+
+
+def prune(keep: set[str]) -> int:
+    """Drop every row not in `keep`. Returns the number removed.
+
+    Files on disk are truth, so a reindex that only inserts is not a rebuild: a
+    row whose artifact was deleted outside the app would survive forever, and
+    /raw/ would keep answering 410 "Run POST /api/reindex" -- advice that never
+    works. Only reindex() calls this, with the slugs it actually found.
+    """
+    with conn() as c:
+        if not keep:
+            return c.execute("DELETE FROM ideas").rowcount
+        placeholders = ",".join("?" * len(keep))
+        return c.execute(
+            f"DELETE FROM ideas WHERE slug NOT IN ({placeholders})", tuple(keep)
+        ).rowcount
