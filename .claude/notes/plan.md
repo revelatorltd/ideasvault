@@ -73,8 +73,17 @@ Depends on U2 (both touch the same `db.upsert` / `ingest.publish` seam).
 rebuilt index can let `dest.write_bytes` overwrite a different artifact — the one
 loss invariant 1 exists to prevent.
 
-- [ ] **Verify:** `pytest -q -k collision` exits 0, including the stale-index case:
+- [x] **Verify:** `pytest -q -k collision` exits 0, including the stale-index case:
   a row whose `sha256` differs from a same-named file on disk must not be overwritten.
+  **Done.** `pytest -q` → **45 passed, 0 failed.** The fix made the guard
+  *simpler*: it now keys on the file, dropping the `db.get` entirely, because
+  disk is truth and a disposable index must never license an overwrite.
+  Measured: row dropped + same title + different content → `shared-2a3535`,
+  original intact; forced 6-char suffix collision escalates to 12
+  (`shared-3a924609ffa5`) leaving the squatter intact; byte-identical republish
+  with no explicit slug adds no file. If even the full digest is taken by
+  different bytes it now refuses with a 400 naming the fix, rather than
+  overwriting.
 
 ## U5 — PLAN task 2.0: clear the pre-M2 blockers
 

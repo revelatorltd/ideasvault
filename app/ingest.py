@@ -24,32 +24,53 @@ def publish(html_bytes: bytes, filename: str = "") -> dict:
 
     html = html_bytes.decode("utf-8", errors="replace")
     meta = metadata.parse(html, filename=filename)
+    sha = hashlib.sha256(html_bytes).hexdigest()
 
     # Collision guard: same title, different content, no explicit slug -> suffix it.
+    #
+    # SPEC 2.4 conditions on "candidate exists". The candidate that matters is the
+    # FILE, not the index row: files on disk are truth (invariant 1) and the index
+    # is disposable, so a rebuilt or partially-lost index must not license
+    # overwriting an artifact that is sitting right there. Keying this on the row
+    # is how an artifact gets silently destroyed.
     if not meta.slug_was_explicit:
-        existing = db.get(meta.slug)
-        sha = hashlib.sha256(html_bytes).hexdigest()
-        if existing and existing["sha256"] != sha:
-            target = CONTENT_DIR / f"{meta.slug}.html"
-            if target.exists() and _sha_of(target) != sha:
-                meta.slug = f"{meta.slug}-{sha[:6]}"
+        meta.slug = _free_slug(meta.slug, sha)
 
     CONTENT_DIR.mkdir(parents=True, exist_ok=True)
     dest = CONTENT_DIR / f"{meta.slug}.html"
     dest.write_bytes(html_bytes)
 
-    action = db.upsert(
-        meta,
-        filename=dest.name,
-        size=len(html_bytes),
-        sha=hashlib.sha256(html_bytes).hexdigest(),
-    )
+    action = db.upsert(meta, filename=dest.name, size=len(html_bytes), sha=sha)
     return {"action": action, "slug": meta.slug, "title": meta.title,
             "tags": meta.tags, "date": meta.date, "url": f"/i/{meta.slug}"}
 
 
 def _sha_of(path: pathlib.Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+SLUG_MAX = 72  # SPEC 2.3
+
+
+def _free_slug(slug: str, sha: str) -> str:
+    """Return a slug whose file either does not exist or already holds this sha.
+
+    Escalates the suffix rather than trusting six hex characters to be unique:
+    24 bits collide roughly once in 16 million, and the cost of a collision here
+    is a destroyed artifact, which is the one outcome invariant 1 exists to rule
+    out. If even the full digest is taken by different bytes, refuse -- a clear
+    400 is better than a silent overwrite.
+    """
+    for width in (0, 6, 12, 64):
+        candidate = slug if width == 0 else f"{slug[: SLUG_MAX - width - 1]}-{sha[:width]}"
+        target = CONTENT_DIR / f"{candidate}.html"
+        if not target.exists() or _sha_of(target) == sha:
+            return candidate
+    raise ValueError(
+        f"Cannot file this artifact: {slug}.html and its hashed variants are all "
+        f"taken by different content. Publish it with an explicit "
+        f"<meta name=\"idea:slug\"> to say which idea it updates."
+    )
 
 
 def drain_inbox() -> list[dict]:
