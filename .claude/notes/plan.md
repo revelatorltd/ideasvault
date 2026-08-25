@@ -119,14 +119,39 @@ candidate defect. Any newly *confirmed* defect becomes a numbered unit here with
 own verification command; refuted and unverified claims are recorded in
 `orientation.md` rather than silently dropped.
 
-- [ ] **Verify:** every confirmed finding either has a ticked unit or an explicit
+- [x] **Verify:** every confirmed finding either has a ticked unit or an explicit
   written reason for deferral in `orientation.md`.
+  **Done, with one caveat stated plainly.** The sweep returned 3 of 7 area maps
+  (metadata, db, ingest — 18 candidates) before I had to close out; its
+  adversarial-verify phase never ran, because the runner's concurrency cap is 2
+  and 14 agents serialise into pairs. So I verified every candidate myself with
+  real output instead of relying on it.
+
+  Outcome: it independently rediscovered F6 (wider form), F7 and F12, all
+  already fixed; its `notes.html~` finding was already closed by F10. Six new
+  defects confirmed and fixed — **F13** (Unicode digits passed the "strict"
+  date check), **F14** (non-ASCII explicit slug hashed the body, so one idea
+  became two rows — invariant 3), **F15** (non-atomic write could destroy the
+  only copy — invariant 1), **F16** (corrupt `vault.db` crash-looped, against
+  SPEC §6's promise of automatic recovery), **F17** (racing first publish 500'd),
+  **F18** (oversized inbox file read into memory before the size check).
+
+  Two confirmed findings **deliberately not fixed**, both needing an owner
+  decision, written up in `orientation.md`: `idea:*` honoured inside `<pre>`
+  (an artifact documenting the metadata block can escalate its own visibility),
+  and `drain_inbox` reading a file a sync client is still writing.
+
+  The 4 unreturned maps: I covered `main` and `views` in my own adversarial pass
+  (token timing, traversal, autoescape, viewer level, poller spam); `ops` was
+  covered by U5; `mcp` is PLAN M5.1 and out of scope by this plan's own
+  boundaries.
 
 ## U7 — Green gate
 
-- [ ] **Verify:** `pytest -q` exits 0 with zero failures; run twice, identical
+- [x] **Verify:** `pytest -q` exits 0 with zero failures; run twice, identical
   results (no ordering dependence); `git status --short` empty; PLAN.md boxes for
   1.1, 1.2 and 2.0 ticked.
+  **Done** — see the transcript for the final run.
 
 ---
 
