@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ideas Vault</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Inter:wght@400;500&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="masthead">
+  <p class="eyebrow">Ideas Vault</p>
+  <h1>Everything I've thought through, filed and searchable.</h1>
+  <div class="controls">
+    <label class="search">
+      <span class="sr-only">Search ideas</span>
+      <input id="q" type="search" placeholder="Search titles, descriptions, tags"
+             autocomplete="off" spellcheck="false">
+      <kbd>/</kbd>
+    </label>
+    <p class="count"><span id="shown">{{ ideas|length }}</span> of {{ ideas|length }} filed</p>
+  </div>
+  {% if tags %}
+  <div class="tagbar" role="group" aria-label="Filter by tag">
+    <button class="chip is-on" data-tag="" type="button">All</button>
+    {% for tag, n in tags %}
+    <button class="chip" data-tag="{{ tag }}" type="button">{{ tag }}<sup>{{ n }}</sup></button>
+    {% endfor %}
+  </div>
+  {% endif %}
+</header>
+
+<main>
+{% if ideas %}
+  <ul class="grid" id="grid">
+    {% for idea in ideas %}
+    <li class="card" data-tags="{{ idea.tags|join(' ') }}"
+        data-text="{{ (idea.title ~ ' ' ~ idea.description ~ ' ' ~ idea.tags|join(' '))|lower }}">
+      <a href="/i/{{ idea.slug }}">
+        <p class="meta">
+          <time datetime="{{ idea.date }}">{{ idea.date }}</time>
+          {% if idea.revision > 1 %}<span class="rev">rev {{ idea.revision }}</span>{% endif %}
+          {% if idea.visibility != 'private' %}<span class="vis">{{ idea.visibility }}</span>{% endif %}
+        </p>
+        <h2>{{ idea.title }}</h2>
+        {% if idea.description %}<p class="desc">{{ idea.description }}</p>{% endif %}
+        {% if idea.tags %}
+        <p class="tags">{% for t in idea.tags %}<span>{{ t }}</span>{% endfor %}</p>
+        {% endif %}
+      </a>
+    </li>
+    {% endfor %}
+  </ul>
+  <p class="empty" id="noresults" hidden>Nothing matches that. Clear the search to see everything.</p>
+{% else %}
+  <div class="empty">
+    <p>The vault is empty.</p>
+    <p>Drop an HTML file into <code>inbox/</code> and it shows up here within seconds.</p>
+  </div>
+{% endif %}
+</main>
+
+<script>
+const q = document.getElementById('q');
+const grid = document.getElementById('grid');
+const shown = document.getElementById('shown');
+const noresults = document.getElementById('noresults');
+let activeTag = '';
+
+function apply() {
+  if (!grid) return;
+  const term = q.value.trim().toLowerCase();
+  let visible = 0;
+  for (const card of grid.children) {
+    const okText = !term || card.dataset.text.includes(term);
+    const okTag = !activeTag || card.dataset.tags.split(' ').includes(activeTag);
+    const show = okText && okTag;
+    card.hidden = !show;
+    if (show) visible++;
+  }
+  shown.textContent = visible;
+  if (noresults) noresults.hidden = visible > 0;
+}
+
+q?.addEventListener('input', apply);
+
+document.querySelectorAll('.chip').forEach(chip => {
+  chip.addEventListener('click', () => {
+    activeTag = chip.dataset.tag === activeTag ? '' : chip.dataset.tag;
+    document.querySelectorAll('.chip').forEach(c =>
+      c.classList.toggle('is-on', (c.dataset.tag || '') === activeTag));
+    apply();
+  });
+});
+
+document.addEventListener('keydown', e => {
+  if (e.key === '/' && document.activeElement !== q) { e.preventDefault(); q?.focus(); }
+  if (e.key === 'Escape' && document.activeElement === q) { q.value = ''; apply(); q.blur(); }
+});
+</script>
+</body>
+</html>

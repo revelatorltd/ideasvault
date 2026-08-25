@@ -1,0 +1,20 @@
+services:
+  vault:
+    build: .
+    restart: unless-stopped
+    environment:
+      VAULT_TOKEN: ${VAULT_TOKEN:?set VAULT_TOKEN in .env}
+      VAULT_VIEWER_LEVEL: private
+      # VAULT_RAW_ORIGIN: https://raw.ideas.example.com   # see README: origin isolation
+    volumes:
+      - ./data:/data          # vault.db + content/ live here; back this folder up
+      - ./inbox:/data/inbox   # drop .html files here to publish
+    ports:
+      - "127.0.0.1:8000:8000"
+
+  # Public ingress with no open ports and no certificates to manage.
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run --token ${CF_TUNNEL_TOKEN}
+    depends_on: [vault]

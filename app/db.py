@@ -1,0 +1,103 @@
+"""SQLite index. Content lives on disk; this table is a rebuildable index."""
+
+from __future__ import annotations
+
+import json
+import os
+import sqlite3
+from contextlib import contextmanager
+
+DB_PATH = os.environ.get("VAULT_DB", "/data/vault.db")
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS ideas (
+    slug          TEXT PRIMARY KEY,
+    title         TEXT NOT NULL,
+    description   TEXT NOT NULL DEFAULT '',
+    tags_json     TEXT NOT NULL DEFAULT '[]',
+    date          TEXT NOT NULL,
+    visibility    TEXT NOT NULL DEFAULT 'private',
+    filename      TEXT NOT NULL,
+    bytes         INTEGER NOT NULL DEFAULT 0,
+    sha256        TEXT NOT NULL DEFAULT '',
+    created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
+    revision      INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS ideas_date ON ideas(date DESC);
+"""
+
+
+@contextmanager
+def conn():
+    os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
+    c = sqlite3.connect(DB_PATH)
+    c.row_factory = sqlite3.Row
+    try:
+        yield c
+        c.commit()
+    finally:
+        c.close()
+
+
+def init() -> None:
+    with conn() as c:
+        c.executescript(SCHEMA)
+
+
+def upsert(meta, filename: str, size: int, sha: str) -> str:
+    """Insert or update by slug. Returns 'created' or 'updated'."""
+    with conn() as c:
+        existing = c.execute(
+            "SELECT sha256, revision FROM ideas WHERE slug = ?", (meta.slug,)
+        ).fetchone()
+        if existing:
+            c.execute(
+                """UPDATE ideas SET title=?, description=?, tags_json=?, date=?,
+                       visibility=?, filename=?, bytes=?, sha256=?,
+                       updated_at=datetime('now'), revision=revision+1
+                   WHERE slug=?""",
+                (meta.title, meta.description, json.dumps(meta.tags), meta.date,
+                 meta.visibility, filename, size, sha, meta.slug),
+            )
+            return "updated"
+        c.execute(
+            """INSERT INTO ideas
+                   (slug, title, description, tags_json, date, visibility,
+                    filename, bytes, sha256)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
+            (meta.slug, meta.title, meta.description, json.dumps(meta.tags),
+             meta.date, meta.visibility, filename, size, sha),
+        )
+        return "created"
+
+
+def _row_to_dict(r: sqlite3.Row) -> dict:
+    d = dict(r)
+    d["tags"] = json.loads(d.pop("tags_json"))
+    return d
+
+
+def list_ideas(max_visibility: str = "private") -> list[dict]:
+    allowed = {"public": ("public",),
+               "internal": ("public", "internal"),
+               "private": ("public", "internal", "private")}[max_visibility]
+    placeholders = ",".join("?" * len(allowed))
+    with conn() as c:
+        rows = c.execute(
+            f"""SELECT * FROM ideas WHERE visibility IN ({placeholders})
+                ORDER BY date DESC, updated_at DESC""",
+            allowed,
+        ).fetchall()
+    return [_row_to_dict(r) for r in rows]
+
+
+def get(slug: str) -> dict | None:
+    with conn() as c:
+        row = c.execute("SELECT * FROM ideas WHERE slug = ?", (slug,)).fetchone()
+    return _row_to_dict(row) if row else None
+
+
+def delete(slug: str) -> bool:
+    with conn() as c:
+        return c.execute("DELETE FROM ideas WHERE slug = ?", (slug,)).rowcount > 0
