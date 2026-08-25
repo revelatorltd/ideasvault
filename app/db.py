@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import pathlib
 import sqlite3
 from contextlib import contextmanager
 
@@ -50,8 +51,21 @@ def conn():
 
 
 def init() -> None:
-    with conn() as c:
-        c.executescript(SCHEMA)
+    """Create the schema, replacing the file if it is not a usable database.
+
+    SPEC 6 promises that a corrupt or deleted index recovers automatically. A
+    truncated or half-written vault.db made every connection raise
+    "file is not a database", so the container crash-looped with every artifact
+    intact on disk. Discarding it is safe by definition: the index is a
+    disposable cache and reindex rebuilds it from content/.
+    """
+    try:
+        with conn() as c:
+            c.executescript(SCHEMA)
+    except sqlite3.DatabaseError:
+        pathlib.Path(DB_PATH).unlink(missing_ok=True)
+        with conn() as c:
+            c.executescript(SCHEMA)
 
 
 def upsert(meta, filename: str, size: int, sha: str) -> str:
@@ -81,11 +95,21 @@ def upsert(meta, filename: str, size: int, sha: str) -> str:
                  meta.visibility, filename, size, sha, meta.slug),
             )
             return "updated"
+        # ON CONFLICT, not a bare INSERT: the SELECT above runs on its own
+        # connection with no lock held, so the inbox poller and an HTTP publish can
+        # both see "no row" for one slug and both INSERT. That raised IntegrityError
+        # -> 500, with the artifact already on disk and no row pointing at it.
         c.execute(
             """INSERT INTO ideas
                    (slug, title, description, tags_json, date, visibility,
                     filename, bytes, sha256)
-               VALUES (?,?,?,?,?,?,?,?,?)""",
+               VALUES (?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(slug) DO UPDATE SET
+                   title=excluded.title, description=excluded.description,
+                   tags_json=excluded.tags_json, date=excluded.date,
+                   visibility=excluded.visibility, filename=excluded.filename,
+                   bytes=excluded.bytes, sha256=excluded.sha256,
+                   updated_at=datetime('now'), revision=revision+1""",
             (meta.slug, meta.title, meta.description, json.dumps(meta.tags),
              meta.date, meta.visibility, filename, size, sha),
         )

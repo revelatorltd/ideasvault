@@ -6,6 +6,7 @@ import hashlib
 import os
 import pathlib
 import shutil
+import tempfile
 
 from . import db, metadata
 
@@ -38,11 +39,35 @@ def publish(html_bytes: bytes, filename: str = "") -> dict:
 
     CONTENT_DIR.mkdir(parents=True, exist_ok=True)
     dest = CONTENT_DIR / f"{meta.slug}.html"
-    dest.write_bytes(html_bytes)
+    _atomic_write(dest, html_bytes)
 
     action = db.upsert(meta, filename=dest.name, size=len(html_bytes), sha=sha)
     return {"action": action, "slug": meta.slug, "title": meta.title,
             "tags": meta.tags, "date": meta.date, "url": f"/i/{meta.slug}"}
+
+
+def _atomic_write(dest: pathlib.Path, payload: bytes) -> None:
+    """Write `payload` to `dest` atomically.
+
+    dest.write_bytes truncates first, so any failure after that point -- ENOSPC on
+    the volume, an OOM kill, SIGTERM mid-write -- leaves a half-written artifact
+    while the row still advertises the old sha256. The file is the only source of
+    truth (invariant 1), so there is nothing to restore it from. os.replace is
+    atomic within a filesystem: readers see either the old bytes or the new ones.
+    The temp name is dot-prefixed and .tmp-suffixed so _artifact_files never picks
+    it up if we die between the write and the rename.
+    """
+    fd, tmp_name = tempfile.mkstemp(dir=dest.parent, prefix=f".{dest.name}.", suffix=".tmp")
+    tmp = pathlib.Path(tmp_name)
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(payload)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, dest)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def _artifact_files(directory: pathlib.Path) -> list[pathlib.Path]:
@@ -109,6 +134,12 @@ def drain_inbox() -> list[dict]:
         if _FAILED.get(path.name) == fingerprint:
             continue  # already reported and unchanged, so there is nothing new to say
         try:
+            # Check the size from stat before reading. publish() checks len() of the
+            # bytes, which is too late: a 4GB drop would already be resident.
+            if stat.st_size > MAX_BYTES:
+                raise ValueError(
+                    f"Artifact is {stat.st_size} bytes; limit is {MAX_BYTES}."
+                )
             results.append(publish(path.read_bytes(), filename=path.name))
             shutil.move(str(path), str(ARCHIVE_DIR / path.name))
             _FAILED.pop(path.name, None)

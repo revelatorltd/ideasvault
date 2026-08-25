@@ -176,4 +176,71 @@ The visibility ladder was also duplicated between `db.list_ideas` and
 `main._allowed`; it now has one definition, since two copies is how a query
 filter and a route guard drift apart on a privacy boundary.
 
-<!-- WORKFLOW RESULTS APPENDED BELOW -->
+### From the independent sweep (metadata, db, ingest maps)
+
+The sweep's own adversarial-verify phase had not finished, so I verified each of
+these myself with real output before touching anything.
+
+**Already fixed before the sweep reported them** — it independently rediscovered
+F7 (reindex cannot remove a row), F12 (unvalidated `VAULT_VIEWER_LEVEL` 500s every
+page), and a wider form of F6 (`conn()` recreates a 0-byte schema-less file). It
+also flagged `reindex` accepting `notes.html~` as hijacking the live slug — the
+F10 case-insensitive suffix filter had already closed that, since
+`Path("notes.html~").suffix` is `.html~`, and the same filter excludes `.part` and
+`.crdownload`.
+
+**F13 — the "strict" date check accepted Unicode digits.** `\d` matches every Nd
+codepoint, so `٢٠٢٠-٠١-٠١` and `２０２６-０８-２５` both passed into a column SPEC §2.2
+declares ISO-8601, where they sort above every real date. Now `[0-9]`.
+
+**F14 — a non-ASCII explicit `idea:slug` broke invariant 3.** `slugify` strips to
+ASCII, so a Cyrillic/CJK/Hebrew slug reduced to `""` and fell back to
+`idea-<sha1(html[:2000])>` — a hash of the *body*. Editing anything in the first
+2000 bytes changed the slug, so one idea became a duplicate row and a second file.
+Measured: same slug `идея-один`, two bodies → `idea-295587e4` and `idea-f2b2770b`.
+The fallback is now seeded from the slug string, so it is stable across edits and
+still distinct per idea.
+
+**F15 — `dest.write_bytes` was not atomic.** It truncates first, so ENOSPC, an OOM
+kill or SIGTERM mid-write left a half-written artifact while the row still
+advertised the old sha256 — and the file is the only source of truth. Now a
+temp-file write plus `os.replace`.
+
+**F16 — a corrupt (not merely deleted) `vault.db` crash-looped the container.**
+SPEC §6 promises "Index corrupt or deleted → Automatic". Measured:
+`DatabaseError: file is not a database`. `init()` now discards an unusable file and
+recreates it, which is safe by definition for a disposable cache.
+
+**F17 — a racing first publish returned 500.** `upsert`'s SELECT ran on its own
+connection with no lock, so the inbox poller and an HTTP publish could both see
+"no row" for one slug and both INSERT. PRD **A3** waives *concurrent authors*, but
+the poller and a request are two writers inside one author, so A3 does not cover
+this. Now `ON CONFLICT(slug) DO UPDATE`.
+
+**F18 — an oversized inbox file was read into memory before the size check.**
+`publish()` checks `len(bytes)`, which is already too late; a 4 GB drop would be
+resident first. Now prechecked from `stat().st_size`.
+
+### Confirmed by the sweep but deliberately NOT fixed
+
+Both need a decision from the owner, so they are flagged rather than built:
+
+1. **`idea:*` meta tags are honoured anywhere in the document, including inside
+   `<pre>`.** An artifact that *documents* the metadata block can therefore set its
+   own slug and escalate its own visibility to `public`. Real, and a privacy
+   concern. The fix — restrict `_meta` to `<head>` — would change behaviour for any
+   existing artifact that puts `idea:*` in the body, which SPEC §2.3 does not
+   explicitly forbid. Needs a call on whether body-level metadata is legitimate.
+2. **`drain_inbox` can publish a file that is still being written.** The F10 filter
+   already excludes `.part`/`.crdownload`/`~`, but a sync client writing directly to
+   `notes.html` can still be read mid-write. Fixing it properly means requiring
+   size+mtime to settle across two polls, which adds state and latency to the M4
+   sync-folder path. Worth doing *with* M4, when the real sync client is known.
+
+### Not yet reported by the sweep
+
+The `main`, `views`, `mcp` and `ops` maps and the whole adversarial-verify phase
+had not returned when this was written — the runner's concurrency cap is 2, so 14
+agents serialise into pairs. I covered `main` and `views` myself (see the
+adversarial-pass section above: token timing, traversal, autoescape, viewer level,
+poller spam). `mcp` is PLAN M5.1 and out of scope here; `ops` was covered by U5.

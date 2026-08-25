@@ -77,7 +77,16 @@ def parse(html: str, filename: str = "") -> IdeaMeta:
     title = " ".join(title.split())[:200]
 
     explicit_slug = _meta(soup, "idea:slug")
-    slug = slugify(explicit_slug or title, fallback_seed=html[:2000])
+    # Seed the hash fallback from the explicit slug when there is one. Seeding it
+    # from the body meant a non-ASCII slug (Cyrillic, CJK, Hebrew) reduced to "" and
+    # then hashed html[:2000] -- so editing anything in the first 2000 bytes changed
+    # the slug, producing a duplicate row and a second file for one idea, against
+    # invariant 3. Seeded from the slug it is stable across edits and still distinct
+    # per idea.
+    slug = slugify(
+        explicit_slug or title,
+        fallback_seed=explicit_slug or html[:2000],
+    )
 
     description = (
         _meta(soup, "idea:description")
@@ -89,7 +98,10 @@ def parse(html: str, filename: str = "") -> IdeaMeta:
     tags = [t.strip().lower() for t in re.split(r"[,;]", raw_tags) if t.strip()][:8]
 
     date = _meta(soup, "idea:date")
-    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date or ""):
+    # [0-9], not \d: \d is Unicode-aware and matches every Nd codepoint, so
+    # Arabic-Indic and full-width digits passed this "strict format check" and
+    # landed in the date column, where they sort above every real ISO date.
+    if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", date or ""):
         date = dt.date.today().isoformat()
 
     visibility = _meta(soup, "idea:visibility").lower()

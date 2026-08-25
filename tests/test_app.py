@@ -8,6 +8,8 @@ writing them first.
 
 from __future__ import annotations
 
+import pathlib
+
 from app import db, ingest, main
 
 
@@ -493,3 +495,119 @@ def test_F12_the_visibility_ladder_has_one_definition(vault):
         ("private", ("public", "internal", "private")),
     ]:
         assert db.visible_at(level) == expected
+
+
+def test_F13_unicode_digits_are_not_a_valid_date(vault):
+    """REGRESSION GUARD F13. SPEC 2.3 calls the date check strict; `\\d` is not.
+
+    `\\d` matches every Unicode Nd codepoint, so Arabic-Indic and full-width digits
+    passed and landed in a column SPEC 2.2 declares as ISO-8601 -- where they sort
+    above every real date.
+    """
+    import datetime as dt
+    from app import metadata
+    today = dt.date.today().isoformat()
+    for bad in ["٢٠٢٠-٠١-٠١",
+                "２０２６-０８-２５"]:
+        m = metadata.parse(f"<html><head><meta name='idea:date' content='{bad}'></head></html>")
+        assert m.date == today, f"{bad!r} must be rejected, got {m.date!r}"
+        assert m.date.isascii()
+
+
+def test_F14_a_non_ascii_explicit_slug_is_stable_across_edits(vault):
+    """REGRESSION GUARD F14 / invariant 3.
+
+    A non-ASCII explicit slug reduces to "" under slugify, and the hash fallback was
+    seeded from html[:2000]. Editing anything in the first 2000 bytes therefore
+    changed the slug, so one idea became a duplicate row and a second file.
+    """
+    body_a = "<html><head><meta name='idea:slug' content='идея'><title>T</title></head><body><p>first</p></body></html>"
+    body_b = "<html><head><meta name='idea:slug' content='идея'><title>T</title></head><body><p>edited right at the front</p></body></html>"
+
+    first = vault.publish(body_a)
+    second = vault.publish(body_b)
+
+    assert first.json()["slug"] == second.json()["slug"], "same idea, same slug"
+    assert second.json()["action"] == "updated"
+    assert len(vault.rows()) == 1, "invariant 3: never a duplicate row"
+    assert len(vault.files()) == 1, "invariant 3: never a second file"
+
+    # And a different non-ASCII slug is still a different idea.
+    other = vault.publish(body_a.replace("идея", "другая"))
+    assert other.json()["slug"] != first.json()["slug"]
+
+
+def test_F15_an_interrupted_write_cannot_destroy_the_existing_artifact(vault):
+    """REGRESSION GUARD F15 / invariant 1.
+
+    write_bytes truncates first, so a failure mid-write left a half-written
+    artifact and nothing to restore from. The write is now atomic, so a failure
+    leaves the previous bytes completely intact.
+    """
+    keep = "the original bytes that must survive a failed write"
+    vault.publish(_artifact("Atomic", keep, slug="atomic"))
+    dest = vault.content / "atomic.html"
+
+    real_replace = ingest.os.replace
+    def boom(src, dst):
+        raise OSError(28, "No space left on device")
+    ingest.os.replace = boom
+    try:
+        with __import__("pytest").raises(OSError):
+            ingest.publish(_artifact("Atomic", "replacement", slug="atomic").encode())
+    finally:
+        ingest.os.replace = real_replace
+
+    assert keep in dest.read_text(), "the original artifact must be untouched"
+    # No debris left behind, and nothing the indexer would pick up.
+    assert vault.files() == ["atomic.html"]
+    assert [p.name for p in ingest._artifact_files(vault.content)] == ["atomic.html"]
+
+
+def test_F16_a_corrupt_index_is_replaced_rather_than_crash_looping(vault):
+    """REGRESSION GUARD F16. SPEC 6: "Index corrupt or deleted -> Automatic"."""
+    vault.publish(_artifact("Survivor", "body", slug="survivor"))
+
+    vault.db_path.write_bytes(b"this is not a sqlite database, it is garbage")
+
+    db.init()  # previously raised sqlite3.DatabaseError: file is not a database
+    r = vault.client.post("/api/reindex", headers=vault.auth)
+
+    assert r.status_code == 200
+    assert [row["slug"] for row in vault.rows()] == ["survivor"]
+
+
+def test_F17_a_racing_first_publish_does_not_500(vault):
+    """REGRESSION GUARD F17 / invariant 3.
+
+    upsert's SELECT ran on its own connection with no lock, so the inbox poller and
+    an HTTP publish could both see "no row" for one slug and both INSERT. The
+    second raised IntegrityError -> 500 with the artifact on disk and no row.
+    """
+    meta = type("M", (), {"slug": "racer", "title": "Racer", "description": "",
+                          "tags": [], "date": "2026-01-01", "visibility": "private"})()
+    assert db.upsert(meta, filename="racer.html", size=1, sha="aaa") == "created"
+    # A second writer that also saw "no row" takes the INSERT path again.
+    with db.conn() as c:
+        c.execute("DELETE FROM ideas WHERE 0")  # keep the row, force a fresh connection
+    assert db.upsert(meta, filename="racer.html", size=1, sha="bbb") in ("created", "updated")
+    assert len(vault.rows()) == 1, "one slug, one row, whichever path ran"
+
+
+def test_F18_an_oversized_inbox_file_is_rejected_from_stat_not_after_reading(vault, monkeypatch):
+    """REGRESSION GUARD F18. publish() checks len(bytes), which is already too late."""
+    monkeypatch.setattr(ingest, "MAX_BYTES", 256)
+    (vault.inbox / "huge.html").write_text("x" * 5000)
+
+    reads = []
+    real_read = pathlib.Path.read_bytes
+    monkeypatch.setattr(
+        pathlib.Path, "read_bytes",
+        lambda self: (reads.append(self.name), real_read(self))[1],
+    )
+    results = ingest.drain_inbox()
+
+    assert [r["action"] for r in results] == ["failed"]
+    assert "256" in results[0]["error"]
+    assert "huge.html" not in reads, "the file must not be read into memory at all"
+    assert (vault.inbox / "huge.html").exists(), "and it stays for inspection"
